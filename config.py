@@ -9,6 +9,10 @@ else:
 DIRETORIO_PDFS = os.path.join(DIRETORIO_PAI, "editais_baixados")
 os.makedirs(DIRETORIO_PDFS, exist_ok=True)
 
+# --- CONFIGURAÇÃO OLLAMA (IA LOCAL) ---
+OLLAMA_URL = "http://localhost:11434/api/generate"
+OLLAMA_MODEL = "qwen2.5:7b-instruct"
+
 # --- PROMPT IA RESTRITIVO ---
 PROMPT_BASE_IA = """
 Você é especialista em análise de editais públicos de inovação, tecnologia e pesquisa.

@@ -1,8 +1,5 @@
-import os, json, time
+import os, json, time, requests
 from datetime import datetime
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
 from playwright.sync_api import sync_playwright
 import config
 
@@ -16,12 +13,10 @@ DICIONARIO_MOTORES_RECOVERY = {
     "Petrobras - Sigitec": rec_petrobras, "Fundep - Projetos": rec_fundep, "CNPq": rec_cnpq, "FINEP": rec_finep
 }
 
-def extrair_dados_com_ia(texto_analise, chave_api, url_edital="N/A", nome_portal="Portal"):
-    try: client = genai.Client(api_key=chave_api)
-    except Exception as e: return {"erro": f"MALA_INICIALIZACAO: {e}"}
-
+def extrair_dados_com_ia(texto_analise, url_edital="N/A", nome_portal="Portal"):
     prompt_completo = f"{config.PROMPT_BASE_IA}\n\nTexto do Edital:\n{texto_analise}"
     
+    # Log de auditoria
     try:
         pasta = os.path.join(config.DIRETORIO_PAI, "logs_auditoria")
         os.makedirs(pasta, exist_ok=True)
@@ -30,38 +25,37 @@ def extrair_dados_com_ia(texto_analise, chave_api, url_edital="N/A", nome_portal
         with open(os.path.join(pasta, f"{nome_limpo}_ia_prompt_{timestamp}.txt"), "w", encoding="utf-8") as f:
             f.write(f"URL: {url_edital}\n\n{prompt_completo}")
     except: pass
+
+    payload = {
+        "model": config.OLLAMA_MODEL,
+        "prompt": prompt_completo,
+        "stream": False,
+        "format": "json",
+        "options": {
+            "num_ctx": 16384  # Janela de contexto ampliada para ler editais longos na RTX 5070
+        }
+    }
     
     try:
-        resposta = client.models.generate_content(
-            model='gemini-2.5-flash', contents=prompt_completo,
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
-        )
-        return json.loads(resposta.text)
-    except APIError as e: return {"erro": f"API_ERRO_{e.code}: {e.message}"}
-    except Exception as e: return {"erro": f"ERRO_INESPERADO: {e}"}
+        response = requests.post(config.OLLAMA_URL, json=payload, timeout=180)
+        if response.status_code == 200:
+            resposta_texto = response.json().get("response", "{}")
+            return json.loads(resposta_texto)
+        return {"erro": f"OLLAMA_HTTP_{response.status_code}"}
+    except Exception as e:
+        return {"erro": f"ERRO_CONEXAO_OLLAMA: {e}"}
 
 def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
     try:
-        hoje_str = datetime.now().date().isoformat()
-        verificar_hoje = config.supabase.table("chaves_api").select("id").eq("ultima_renovacao", hoje_str).execute()
-        
-        if not verificar_hoje.data:
-            log_func("    [🔄 Auto-Renovação] Reativando chaves para o novo dia...")
-            todas = config.supabase.table("chaves_api").select("id").execute()
-            for c in todas.data:
-                config.supabase.table("chaves_api").update({"status": "ativa", "ultima_renovacao": hoje_str, "falhas_seguidas": 0}).eq("id", c["id"]).execute()
-            
-        lista_chaves_banco = config.supabase.table("chaves_api").select("*").eq("status", "ativa").order("id").execute().data
+        itens_pendentes = config.supabase.table("editais").select("*").eq("status_ia", "PENDENTE").execute().data
     except Exception as e_bd:
-        log_func(f"    [X] Erro chaves: {e_bd}"); return "vazio"
+        log_func(f"    [X] Erro ao consultar banco: {e_bd}")
+        return "erro"
 
-    if not lista_chaves_banco: return "bloqueio_diario"
+    if not itens_pendentes: 
+        return "vazio"
 
-    itens_pendentes = config.supabase.table("editais").select("*").eq("status_ia", "PENDENTE").execute().data
-    if not itens_pendentes: return "vazio"
-
-    log_func(f"    [Esteira IA] Processando {len(itens_pendentes)} editais...")
-    indice_chave_atual = 0
+    log_func(f"    [Esteira IA Local] Processando {len(itens_pendentes)} editais via Ollama...")
     
     for idx, edital in enumerate(itens_pendentes, start=1):
         texto_para_ia = edital.get("escopo", "") or edital.get("texto_extracao", "")
@@ -69,24 +63,12 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
             config.supabase.table("editais").update({"status_ia": "erro_sem_texto", "escopo": "Erro: Texto indisponivel."}).eq("url", edital["url"]).execute()
             continue
 
-        edital_processado_com_sucesso = False
-        while indice_chave_atual < len(lista_chaves_banco):
-            chave_obj = lista_chaves_banco[indice_chave_atual]
-            
-            for tentativa in range(1, 4):
-                resultado_ia = extrair_dados_com_ia(texto_para_ia, chave_obj["chave"], edital['url'], edital['portal'])
-                if "erro" not in resultado_ia: edital_processado_com_sucesso = True; break
-                err_msg = str(resultado_ia["erro"]).upper()
-                if "503" in err_msg or "HIGH DEMAND" in err_msg: time.sleep(20)
-                else: break
-            
-            if edital_processado_com_sucesso: break
-            
-            if "RESOURCE_EXHAUSTED" in err_msg or "QUOTA" in err_msg or "429" in err_msg:
-                config.supabase.table("chaves_api").update({"status": "esgotada"}).eq("id", chave_obj["id"]).execute()
-            indice_chave_atual += 1
+        log_func(f"    [Ollama] Analisando edital ({idx}/{len(itens_pendentes)}): {edital['url']}")
+        resultado_ia = extrair_dados_com_ia(texto_para_ia, edital['url'], edital['portal'])
 
-        if not edital_processado_com_sucesso: return "bloqueio_diario"
+        if "erro" in resultado_ia:
+            log_func(f"    [⚠️] Falha de leitura local ({edital['url']}): {resultado_ia['erro']}")
+            continue
 
         # Validação de Prazo Expirado
         prazo_iso = resultado_ia.get("prazo_iso") or ""
@@ -108,18 +90,19 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
             "escopo": resultado_ia.get("escopo") or "Não encontrado",
             "prazo_iso": prazo_iso if (prazo_iso and "não" not in str(prazo_iso).lower()) else (fim_projeto_iso if fim_projeto_iso else "9999-12-31 23:59"),
             "vigencia_projeto": resultado_ia.get("vigencia_projeto") or "Não encontrada",
-            "tags_ia": resultado_ia.get("tags_ia") or "Geral", "status_ia": "CONCLUIDO"
+            "tags_ia": resultado_ia.get("tags_ia") or "Geral", 
+            "status_ia": "CONCLUIDO"
         }).eq("url", edital["url"]).execute()
-        if idx < len(itens_pendentes): time.sleep(4)
-        
+
     return "sucesso"
 
 def executar_retrabalho_editais_com_erro(log_func):
-    itens_com_erro = config.supabase.table("editais").select("*").eq("status_ia", "erro_sem_texto").execute().data
-    if not itens_com_erro: return
+    try:
+        itens_com_erro = config.supabase.table("editais").select("*").eq("status_ia", "erro_sem_texto").execute().data
+    except:
+        return
 
-    chaves = config.supabase.table("chaves_api").select("*").eq("status", "ativa").order("id").execute().data
-    if not chaves: return
+    if not itens_com_erro: return
 
     with sync_playwright() as p_retro:
         browser = p_retro.chromium.launch(headless=True, args=["--headless=shell"])
@@ -132,7 +115,7 @@ def executar_retrabalho_editais_com_erro(log_func):
             try:
                 txt = func(page, edital["url"])
                 if txt and len(txt.strip()) >= 100:
-                    res = extrair_dados_com_ia(txt, chaves[0]["chave"], edital["url"], edital["portal"])
+                    res = extrair_dados_com_ia(txt, edital["url"], edital["portal"])
                     if "erro" not in res:
                         config.supabase.table("editais").update({
                             "titulo": res.get("titulo") or "Recuperado", "datas": res.get("datas") or "A consultar",

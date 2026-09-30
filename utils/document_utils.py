@@ -1,4 +1,5 @@
 import os, sys, requests
+
 if getattr(sys, 'frozen', False):
     DIR_TESS = os.path.join(sys._MEIPASS, "tesseract_bin")
 else:

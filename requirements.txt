@@ -1,0 +1,15 @@
+# --- Framework de Banco de Dados e Conexão ---
+supabase>=2.0.0
+
+# --- Requisições HTTP e Manipulação de HTML ---
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+
+# --- Automação de Navegador (SPAs / JS Render) ---
+playwright>=1.40.0
+
+# --- Leitura e Processamento de Documentos e PDFs ---
+pypdf>=3.17.0
+pdfminer.six>=20221105
+pdf2image>=1.16.3
+pytesseract>=0.3.10

@@ -65,10 +65,7 @@ def processar_pagina_interna(url_edital, ignorar_links, nome_portal, log, atuali
         except Exception as e_txt:
             log(f"        [⚠️] Falha ao salvar auditoria: {e_txt}")
 
-        if len(texto_limpo) > 25000:
-            texto_final = f"{texto_limpo[:15000]}\n\n[... SUCINTADO ...]\n\n{texto_limpo[-10000:]}"
-        else:
-            texto_final = texto_limpo
+        texto_final = texto_limpo
 
         dados_edital = {
             "url": url_edital, "portal": nome_portal, "titulo": "Processando...", "palavra_chave": "Busca Ampla",
