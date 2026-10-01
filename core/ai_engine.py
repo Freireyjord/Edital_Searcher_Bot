@@ -47,15 +47,26 @@ def extrair_dados_com_ia(texto_analise, url_edital="N/A", nome_portal="Portal"):
 
 def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
     try:
-        itens_pendentes = config.supabase.table("editais").select("*").eq("status_ia", "PENDENTE").execute().data
+        hoje_str = datetime.now().date().isoformat()
+        verificar_hoje = config.supabase.table("chaves_api").select("id").eq("ultima_renovacao", hoje_str).execute()
+        
+        if not verificar_hoje.data:
+            log_func("    [🔄 Auto-Renovação] Reativando chaves para o novo dia...")
+            todas = config.supabase.table("chaves_api").select("id").execute()
+            for c in todas.data:
+                config.supabase.table("chaves_api").update({"status": "ativa", "ultima_renovacao": hoje_str, "falhas_seguidas": 0}).eq("id", c["id"]).execute()
+            
+        lista_chaves_banco = config.supabase.table("chaves_api").select("*").eq("status", "ativa").order("id").execute().data
     except Exception as e_bd:
-        log_func(f"    [X] Erro ao consultar banco: {e_bd}")
-        return "erro"
+        log_func(f"    [X] Erro chaves: {e_bd}"); return "vazio"
 
-    if not itens_pendentes: 
-        return "vazio"
+    if not lista_chaves_banco: return "bloqueio_diario"
 
-    log_func(f"    [Esteira IA Local] Processando {len(itens_pendentes)} editais via Ollama...")
+    itens_pendentes = config.supabase.table("editais").select("*").eq("status_ia", "PENDENTE").execute().data
+    if not itens_pendentes: return "vazio"
+
+    log_func(f"    [Esteira IA] Processando {len(itens_pendentes)} editais...")
+    indice_chave_atual = 0
     
     for idx, edital in enumerate(itens_pendentes, start=1):
         texto_para_ia = edital.get("escopo", "") or edital.get("texto_extracao", "")
@@ -63,14 +74,57 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
             config.supabase.table("editais").update({"status_ia": "erro_sem_texto", "escopo": "Erro: Texto indisponivel."}).eq("url", edital["url"]).execute()
             continue
 
-        log_func(f"    [Ollama] Analisando edital ({idx}/{len(itens_pendentes)}): {edital['url']}")
-        resultado_ia = extrair_dados_com_ia(texto_para_ia, edital['url'], edital['portal'])
+        edital_processado_com_sucesso = False
+        while indice_chave_atual < len(lista_chaves_banco):
+            chave_obj = lista_chaves_banco[indice_chave_atual]
+            
+            for tentativa in range(1, 4):
+                resultado_ia = extrair_dados_com_ia(texto_para_ia, chave_obj["chave"], edital['url'], edital['portal'])
+                if "erro" not in resultado_ia: edital_processado_com_sucesso = True; break
+                err_msg = str(resultado_ia["erro"]).upper()
+                if "503" in err_msg or "HIGH DEMAND" in err_msg: time.sleep(20)
+                else: break
+            
+            if edital_processado_com_sucesso: break
+            
+            if "RESOURCE_EXHAUSTED" in err_msg or "QUOTA" in err_msg or "429" in err_msg:
+                config.supabase.table("chaves_api").update({"status": "esgotada"}).eq("id", chave_obj["id"]).execute()
+            indice_chave_atual += 1
 
-        if "erro" in resultado_ia:
-            log_func(f"    [⚠️] Falha de leitura local ({edital['url']}): {resultado_ia['erro']}")
+        if not edital_processado_com_sucesso: return "bloqueio_diario"
+
+        # --- NOVA ESTEIRA DE ANÁLISE DE STATUS DA IA LOCAL ---
+        status_projeto_ia = str(resultado_ia.get("status_projeto", "")).strip().upper()
+        
+        # Cenário 1: Descartes Críticos (Encerrados, Erros de Página ou Páginas Institucionais)
+        if status_projeto_ia in ["ENCERRADO", "PAGINA_ERRO", "NAO_EDITAL"]:
+            motivo_log = {
+                "ENCERRADO": "Inscrições encerradas/vencidas",
+                "PAGINA_ERRO": "Erro HTTP ou falha de carregamento no portal",
+                "NAO_EDITAL": "Página institucional ou manual administrativo (Não edital)"
+            }.get(status_projeto_ia, "Critério de descarte automático")
+            
+            config.supabase.table("editais").update({
+                "titulo": resultado_ia.get("titulo") or f"Descartado ({status_projeto_ia})",
+                "datas": "Descartado",
+                "status_ia": "descartado_vencido",
+                "escopo": f"Edital movido para lixeira automatizada por motivo de: {motivo_log}."
+            }).eq("url", edital["url"]).execute()
+            
+            log_func(f"    [🗑️ DESCARTE IA] URL limpa da fila ({status_projeto_ia}): {edital['url']}")
             continue
 
-        # Validação de Prazo Expirado
+        # Cenário 2: Falha Crítica de Informações (Texto vazio/incompleto para mapeamento)
+        elif status_projeto_ia == "N/A INFO":
+            config.supabase.table("editais").update({
+                "status_ia": "erro_sem_texto",
+                "escopo": "Erro: A IA leu o conteúdo, mas não localizou escopo ou linhas de pesquisa válidas."
+            }).eq("url", edital["url"]).execute()
+            
+            log_func(f"    [⚠️ ALERTA IA] Edital marcado com erro de leitura (N/A INFO): {edital['url']}")
+            continue
+
+        # Cenário 3: Validação de Calendário (Segunda Camada de Segurança para ATIVO e ATEMPORAL)
         prazo_iso = resultado_ia.get("prazo_iso") or ""
         fim_projeto_iso = resultado_ia.get("fim_projeto_iso") or ""
         data_corte = prazo_iso if (prazo_iso and "não" not in str(prazo_iso).lower()) else fim_projeto_iso
@@ -78,9 +132,20 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
         if data_corte and "9999" not in data_corte:
             try:
                 if datetime.strptime(data_corte.strip(), "%Y-%m-%d").date() < datetime.now().date():
-                    config.supabase.table("editais").update({"datas": "Expirado", "status_ia": "descartado_vencido"}).eq("url", edital["url"]).execute()
+                    config.supabase.table("editais").update({
+                        "datas": "Expirado", 
+                        "status_ia": "descartado_vencido",
+                        "escopo": "Edital descartado retroativamente pela checagem de calendário (data_corte retroativa)."
+                    }).eq("url", edital["url"]).execute()
+                    log_func(f"    [⏳ DESCARTE DATA] Edital vencido no calendário cronológico: {edital['url']}")
                     continue
             except: pass
+
+        # Cenário 4: Registro Aprovado com Sucesso (Status ATIVO ou ATEMPORAL)
+        # Força um fallback caso a data seja atemporal
+        prazo_iso_final = prazo_iso if (prazo_iso and "não" not in str(prazo_iso).lower()) else (fim_projeto_iso if fim_projeto_iso else "9999-12-31 23:59")
+        if status_projeto_ia == "ATEMPORAL":
+            prazo_iso_final = "9999-12-31 23:59"
 
         config.supabase.table("editais").update({
             "titulo": resultado_ia.get("titulo") or "Edital sem título",
@@ -88,12 +153,15 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
             "pesquisa": resultado_ia.get("pesquisa") or "Não encontrada",
             "subvencao": resultado_ia.get("subvencao") or "Não encontrada",
             "escopo": resultado_ia.get("escopo") or "Não encontrado",
-            "prazo_iso": prazo_iso if (prazo_iso and "não" not in str(prazo_iso).lower()) else (fim_projeto_iso if fim_projeto_iso else "9999-12-31 23:59"),
+            "prazo_iso": prazo_iso_final,
             "vigencia_projeto": resultado_ia.get("vigencia_projeto") or "Não encontrada",
             "tags_ia": resultado_ia.get("tags_ia") or "Geral", 
             "status_ia": "CONCLUIDO"
         }).eq("url", edital["url"]).execute()
-
+        
+        log_func(f"    [✓ APROVADO] Edital processado com sucesso como {status_projeto_ia}: {resultado_ia.get('titulo')}")
+        if idx < len(itens_pendentes): time.sleep(4)
+        
     return "sucesso"
 
 def executar_retrabalho_editais_com_erro(log_func):
