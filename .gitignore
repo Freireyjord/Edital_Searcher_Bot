@@ -1,8 +1,12 @@
+# Secrets
+.env
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
 logs_auditoria/
+not/
 
 # C extensions
 *.so
