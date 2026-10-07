@@ -1,4 +1,5 @@
 import os, sys
+from dotenv import load_dotenv
 from supabase import create_client
 
 if getattr(sys, 'frozen', False):
@@ -6,12 +7,26 @@ if getattr(sys, 'frozen', False):
 else:
     DIRETORIO_PAI = os.path.dirname(os.path.abspath(__file__))
 
+# Carrega o .env que fica ao lado do config.py (ou do executável)
+load_dotenv(os.path.join(DIRETORIO_PAI, ".env"))
+
+
+def _obrigatoria(nome):
+    valor = os.getenv(nome)
+    if not valor:
+        raise RuntimeError(
+            f"Variável de ambiente '{nome}' não definida. "
+            f"Copie .env.example para .env e preencha."
+        )
+    return valor
+
+
 DIRETORIO_PDFS = os.path.join(DIRETORIO_PAI, "editais_baixados")
 os.makedirs(DIRETORIO_PDFS, exist_ok=True)
 
 # --- CONFIGURAÇÃO OLLAMA (IA LOCAL) ---
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "qwen2.5:7b-instruct"
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b-instruct")
 
 # --- PROMPT IA RESTRITIVO ---
 PROMPT_BASE_IA = """
@@ -45,12 +60,12 @@ Siga estritamente esta estrutura para o JSON:
 }
 """
 
-# --- CONFIGURAÇÕES DE RELAY CORPORATIVO INTERNO - FIEB ---
-SMTP_SERVIDOR = "fieb-org-br.mail.protection.outlook.com"
-SMTP_PORTA = 25
-SMTP_REMETENTE = "joao.freire@fbter.org.br"
+# --- CONFIGURAÇÕES DE RELAY CORPORATIVO INTERNO ---
+SMTP_SERVIDOR = _obrigatoria("SMTP_SERVIDOR")
+SMTP_PORTA = int(os.getenv("SMTP_PORTA", "25"))
+SMTP_REMETENTE = _obrigatoria("SMTP_REMETENTE")
 
-# --- CONEXÃO SUPABASE ---
-SUPABASE_URL = "https://sjozzxjyqkcofjmyljlv.supabase.co"
-SUPABASE_KEY = "sb_publishable_r8890QkbhIEaO1A8gV9p8A_lYzTfuxI"
+# --- CONEXÃO SUPABASE (service_role: uso exclusivo do robô) ---
+SUPABASE_URL = _obrigatoria("SUPABASE_URL")
+SUPABASE_KEY = _obrigatoria("SUPABASE_SERVICE_KEY")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
