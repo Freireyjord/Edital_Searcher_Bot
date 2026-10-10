@@ -230,8 +230,9 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
                  .order("created_at")
                  .execute().data)
     except Exception as e_bd:
-        log_func(f"    [X] Erro ao consultar banco: {e_bd}")
-        return "erro"
+        log_func(f"    [X] Erro chaves: {e_bd}"); return "vazio"
+
+    if not lista_chaves_banco: return "bloqueio_diario"
 
     if not itens:
         return "vazio"

@@ -40,12 +40,12 @@ MAX_TENTATIVAS = int(os.getenv("MAX_TENTATIVAS", "3"))
 # --- PROMPT IA RESTRITIVO ---
 PROMPT_BASE_IA = """
 Você é especialista em análise de editais públicos de inovação, tecnologia e pesquisa.
-Extraia somente informações explicitamente existentes no texto fornecido. Nunca invente valores.
+Extraia somente informações explicitamente existentes no texto fornecido. Nunca invente valores ou qualquer outro tipo de informação.
 Caso não encontre uma informação de jeito nenhum, retorne o campo correspondente como "Não encontrada".
 
 Responda ESTRITAMENTE com um JSON válido (sem markdown, sem blocos extras).
 
-DIRETRIZES DE CRIAÇÃO DAS TAGS:
++ DIRETRIZES DE CRIAÇÃO DAS TAGS:
 Identifique de 3 a 10 palavras-chave ou termos técnicos específicos e profundos que definem o CONTEÚDO TÉCNICO E ESCOPO DO PROJETO deste edital (ex: inteligência artificial, biocombustíveis, previdência complementar, smart cities, telecomunicações). 
 
 Proibições Absolutas:
@@ -55,10 +55,20 @@ Proibições Absolutas:
 
 Insira esses termos técnicos no campo "tags_ia" obrigatoriamente separados por vírgula.
 
++ DIRETRIZES DE STATUS DO PROJETO:
+A partir das informações adquiridas, analise e classifique o edital/chamado estritamente em uma das seguintes categorias para o campo "status_projeto":
+- "ATIVO": O edital foi lido com sucesso, possui informações relevantes ("datas" e "escopo"/"pesquisa") e as inscrições estão abertas ou programadas para abrir.
+- "ENCERRADO": Se houver menção explícita de "Inscrição Encerrada", "Chamada Encerrada", ou se os prazos descritos deixarem claro que o período de submissão já acabou.
+- "N/A INFO": Conseguiu ler o texto, mas ele não traz informações sobre o que é o projeto (não encontrou dados reais de "pesquisa", "escopo" ou "subvencao").
+- "ATEMPORAL": O edital está aberto/ativo, mas não possui nenhum tipo de data limite ou duração descrita no texto.
+- "PAGINA_ERRO": O texto fornecido indica um erro do servidor do portal, como "Erro 404", "Página não encontrada", "Acesso negado", "Bad Gateway" ou falhas de carregamento de sistema.
+- "NAO_EDITAL": O texto lido pertence a uma página institucional, manual de uso de sistema, termos de privacidade ou notícias do portal, e NÃO se trata de uma oportunidade/chamada pública de edital.
+
 Siga estritamente esta estrutura para o JSON:
 {
   "titulo": "Nome/Título oficial simplificado do edital encontrado",
-  "datas": "Texto resumido com o prazo limite de submissão do edital no formato 'DD-MM-YY - DD-MM-YY' ou caso ache so a data de abertura 'Iniciado em DD-MM-YY' ou caso so a data de encerramento 'Até DD-MM-YY'",
+  "status_projeto": "ATIVO ou ENCERRADO ou N/A INFO ou ATEMPORAL ou PAGINA_ERRO ou NAO_EDITAL",
+  "datas": "Texto resumido com o prazo limite de submissão do edital no formato 'DD-MM-YY - DD-MM-YY' ou caso ache só a data de abertura 'Iniciado em DD-MM-YY' ou caso só a data de encerramento 'Até DD-MM-YY'",
   "prazo_iso": "Data limite de submissão formatada em YYYY-MM-DD (se encontrada)",
   "vigencia_projeto": "Texto resumido com o período/vigência do projeto (ex: Data de início, término ou prorrogações encontradas)",
   "fim_projeto_iso": "Data de término ou prorrogação final do projeto formatada em YYYY-MM-DD (se encontrada)",
