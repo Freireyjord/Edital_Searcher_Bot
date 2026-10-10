@@ -34,6 +34,12 @@ OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
 # 40.000 chars ≈ 11-12k tokens, deixando folga no num_ctx para prompt + resposta.
 MAX_CHARS_TEXTO_IA = int(os.getenv("MAX_CHARS_TEXTO_IA", "40000"))
 
+# --- PDFs anexos ---
+MAX_PDFS_POR_EDITAL = int(os.getenv("MAX_PDFS_POR_EDITAL", "3"))   # anexos lidos por edital
+MAX_PDF_MB = int(os.getenv("MAX_PDF_MB", "30"))                    # ignora PDFs maiores que isso
+OCR_MAX_PAGINAS = int(os.getenv("OCR_MAX_PAGINAS", "10"))          # páginas por PDF escaneado
+MAX_CHARS_TEXTO_BRUTO = int(os.getenv("MAX_CHARS_TEXTO_BRUTO", "400000"))  # teto gravado em texto_extracao
+
 # Após N falhas (scraping ou IA) o edital vira 'falha_definitiva' e sai da fila
 MAX_TENTATIVAS = int(os.getenv("MAX_TENTATIVAS", "3"))
 

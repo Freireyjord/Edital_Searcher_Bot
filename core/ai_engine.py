@@ -4,6 +4,7 @@ from playwright.sync_api import sync_playwright
 import config
 import portais
 from core.ai_validator import validar_resultado
+from utils.texto_utils import preparar_texto_para_ia
 
 # Status possíveis em editais.status_ia
 #   PENDENTE          -> aguardando IA
@@ -74,19 +75,6 @@ def registrar_falha(edital, status_falha, motivo, log_func):
 # ---------------------------------------------------------------------------
 # IA local (Ollama)
 # ---------------------------------------------------------------------------
-def preparar_texto(texto, limite):
-    """
-    Garante que o texto cabe no contexto. Se passar do limite, mantém o início (70%)
-    e o fim (30%): prazos e verbas costumam estar nas pontas do documento.
-    """
-    texto = texto.strip()
-    if len(texto) <= limite:
-        return texto
-    cabeca = int(limite * 0.7)
-    cauda = limite - cabeca
-    return texto[:cabeca] + "\n\n[... trecho intermediário omitido por tamanho ...]\n\n" + texto[-cauda:]
-
-
 def montar_prompt(texto):
     # Texto primeiro, instruções por último (modelos seguem melhor instruções finais em
     # contextos longos). Os delimitadores reduzem prompt injection vindo do conteúdo raspado.
@@ -103,7 +91,7 @@ def extrair_dados_com_ia(texto_analise, url_edital="N/A", nome_portal="Portal"):
     Retorna o JSON bruto do modelo, ou {"erro": msg, "tipo": tipo}.
     tipo: 'conexao' (Ollama fora do ar), 'timeout', 'http', 'json'.
     """
-    prompt_completo = montar_prompt(preparar_texto(texto_analise, config.MAX_CHARS_TEXTO_IA))
+    prompt_completo = montar_prompt(preparar_texto_para_ia(texto_analise, config.MAX_CHARS_TEXTO_IA))
 
     try:
         pasta = os.path.join(config.DIRETORIO_PAI, "logs_auditoria")
