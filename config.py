@@ -27,6 +27,15 @@ os.makedirs(DIRETORIO_PDFS, exist_ok=True)
 # --- CONFIGURAÇÃO OLLAMA (IA LOCAL) ---
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b-instruct")
+OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
+
+# Limite de caracteres do edital enviados à IA. ~3,5 caracteres/token em português:
+# 40.000 chars ≈ 11-12k tokens, deixando folga no num_ctx para prompt + resposta.
+MAX_CHARS_TEXTO_IA = int(os.getenv("MAX_CHARS_TEXTO_IA", "40000"))
+
+# Após N falhas (scraping ou IA) o edital vira 'falha_definitiva' e sai da fila
+MAX_TENTATIVAS = int(os.getenv("MAX_TENTATIVAS", "3"))
 
 # --- PROMPT IA RESTRITIVO ---
 PROMPT_BASE_IA = """
