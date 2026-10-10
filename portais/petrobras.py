@@ -180,6 +180,7 @@ def varrer(log, atualizar_tabela_func=None):
 
             log(f"        [Fila {idx}/{len(urls_validas)}] Extraindo conteúdo via SPA v2: {url_edital}")
             texto_renderizado = ""
+            links_pagina = []
 
             try:
                 page_int.goto(url_edital, timeout=35000, wait_until="networkidle")
@@ -191,12 +192,17 @@ def varrer(log, atualizar_tabela_func=None):
                     time.sleep(3.0)
 
                 texto_renderizado = page_int.evaluate("() => document.body.innerText")
+                # Links da página renderizada (para localizar PDFs anexos)
+                links_pagina = page_int.evaluate(
+                    "() => Array.from(document.querySelectorAll('a[href]')).map(a => [a.href, (a.innerText || '').trim()])"
+                )
 
             except Exception as e:
                 log(f"        [⚠️ Alerta] Falha de renderização assíncrona na página interna: {e}")
 
             web_utils.processar_pagina_interna(
-                url_edital, [], NOME_PORTAL, log, None, texto_pre_extraido=texto_renderizado
+                url_edital, [], NOME_PORTAL, log, None,
+                texto_pre_extraido=texto_renderizado, links_extra=links_pagina
             )
 
             time.sleep(random.uniform(1.0, 2.0))
