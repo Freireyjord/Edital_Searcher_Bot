@@ -1,94 +1,131 @@
 # Robô de Monitoramento e Prospecção de Editais (PCE)
 
-Este é um ecossistema automatizado de inteligência focado na varredura, extração, análise e notificação de novos editais públicos e chamadas de inovação, tecnologia e pesquisa. 
+Ecossistema automatizado para varredura, extração, análise e notificação de editais públicos e chamadas de inovação, tecnologia e pesquisa.
 
-O sistema realiza buscas periódicas em portais como **CNPq, Finep, Fundep e Petrobras (Sigitec)**, utiliza inteligência artificial (**Google Gemini**) para resumir e categorizar o escopo técnico das oportunidades e gerencia as preferências de notificações enviando relatórios semanais customizados por e-mail (via SMTP corporativo) para múltiplos usuários cadastrados.
+O robô coleta editais de **CNPq, Finep, Fundep e Petrobras (Sigitec)**, usa uma **IA local (Ollama)** para resumir e categorizar o escopo técnico e grava tudo no **Supabase**. Também envia relatórios semanais personalizados por e-mail (SMTP corporativo) aos assinantes cadastrados.
 
 ---
 
-## 📂 Estrutura do Projeto
-
-O projeto adota uma arquitetura modular baseada em responsabilidades isoladas para garantir facilidade de manutenção e escalabilidade:
+## Estrutura do projeto
 
 ```text
 meu_projeto/
+├── config.py              # Carrega .env, conecta ao Supabase, prompt da IA
+├── main.py                # Orquestrador (loop de background)
+├── .env                   # Segredos (NÃO versionar)
+├── .env.example           # Modelo de variáveis
+├── requirements.txt
 │
-├── config.py              # Credenciais, conexão com o Supabase e prompt base da IA
-├── main.py                # Serviço de background principal (Orquestrador do loop)
-├── README.md              # Documentação técnica do repositório
-│
-├── core/                  # Core business e processamento de regras de negócio
+├── core/
 │   ├── __init__.py
-│   ├── ai_engine.py       # Extração com Gemini (Prompts, rotação de chaves e IA)
-│   ├── db_cleaner.py      # Rotina de expurgo de editais vencidos na base
-│   └── reporter.py        # Processador e distribuidor multi-usuário de relatórios SMTP
+│   ├── ai_engine.py       # Fila de IA (Ollama) e retrabalho
+│   ├── ai_validator.py    # Validação/normalização da resposta do LLM
+│   ├── db_cleaner.py      # Marca editais vencidos como expirados
+│   └── reporter.py        # Relatórios semanais por e-mail
 │
-├── utils/                 # Ferramentas utilitárias e extratores de texto
+├── utils/
 │   ├── __init__.py
-│   ├── scraper_utils.py   # Manipulação de requisições, BeautifulSoup e limpeza de HTML
-│   └── document_utils.py  # Leitores profundos de PDF, TextMiner e OCR Tesseract
+│   ├── scraper_utils.py   # Requisições, limpeza de HTML, registro no banco
+│   └── document_utils.py  # Leitura de PDF (pdfminer / OCR)
 │
-└── portais/               # Motores dedicados de raspagem (Scrapers)
+└── portais/               # Um módulo por portal
     ├── __init__.py
-    ├── cnpq.py            # Motor focado nas Chamadas Abertas do CNPq
-    ├── fundep.py          # Motor focado nos Projetos da Fundep
-    ├── finep.py           # Motor focado nas Oportunidades da Finep (Liferay)
-    └── petrobras.py       # Motor focado no SPA React do Sigitec Petrobras
+    ├── cnpq.py
+    ├── fundep.py
+    ├── finep.py
+    └── petrobras.py
 ```
+
+Cada módulo de portal deve expor:
+- `NOME_PORTAL`: nome gravado na coluna `portal`;
+- `varrer(log, atualizar_tabela_func)`: coleta e registra os editais;
+- `recuperar(page, url)` *(opcional)*: re-extração de texto no retrabalho. Se não existir, usa-se o extrator genérico.
 
 ---
 
-## 🛠️ Tecnologias e Dependências
+## Tecnologias
 
-O robô foi desenvolvido em **Python 3.13** utilizando as seguintes tecnologias centrais:
-* **Banco de Dados:** Supabase (PostgreSQL em Nuvem) para persistência de dados e controle de usuários.
-* **Inteligência Artificial:** SDK `google-genai` integrado ao modelo `gemini-2.5-flash` para estruturação de dados em formato JSON.
-* **Automação de Navegação:** `playwright` para renderização de aplicações de página única (SPAs) e `BeautifulSoup4` para mineração clássica de HTML.
-* **Processamento de Documentos:** `pypdf`, `pdfminer.six`, `pdf2image` e `pytesseract` (Tesseract OCR) para leitura de editais em PDFs textuais ou escaneados.
+- **Python 3.13**
+- **Supabase** (PostgreSQL) para persistência
+- **Ollama** (`qwen2.5:14b-instruct` por padrão) para extração estruturada em JSON
+- **Playwright** + **BeautifulSoup4** para raspagem (SPAs e HTML estático)
+- **pdfminer.six / pypdf / pytesseract** para PDFs
 
 ---
 
-## 🚀 Instalação e Configuração
+## Instalação
 
-### 1. Clonar o Repositório
 ```bash
-git clone https://github.com
-cd seu-repositorio
-```
+git clone <URL-DO-REPOSITORIO>
+cd <pasta-do-projeto>
 
-### 2. Instalar os Pacotes Python
-Instale todas as distribuições requeridas através do gerenciador de pacotes `pip`:
-```bash
-pip install requests beautifulsoup4 pypdf pdf2image google-genai playwright supabase pytesseract pdfminer.six
-```
+python -m venv .venv
+# Windows: .venv\Scripts\activate   |   Linux/Mac: source .venv/bin/activate
 
-### 3. Instalar o Navegador do Playwright
-O Playwright necessita baixar o binário isolado do Chromium para renderizar as páginas dinâmicas:
-```bash
+pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-### 4. Configurar as Variáveis de Ambiente e Bancos
-Certifique-se de validar as chaves e URLs de comunicação dentro do arquivo `config.py`:
-* **Supabase:** URL e a chave pública de acesso (`SUPABASE_URL` e `SUPABASE_KEY`).
-* **SMTP:** Servidor de relay corporativo configurado para envio de mensagens internas.
+### Ollama
+
+Instale o [Ollama](https://ollama.com) e baixe o modelo:
+
+```bash
+ollama pull qwen2.5:14b-instruct
+```
+
+### Variáveis de ambiente
+
+```bash
+cp .env.example .env     # Windows: copy .env.example .env
+```
+
+Preencha o `.env`:
+
+| Variável | Descrição |
+|---|---|
+| `SUPABASE_URL` | URL do projeto Supabase |
+| `SUPABASE_SERVICE_KEY` | Chave `service_role` (somente backend; nunca no front-end) |
+| `OLLAMA_URL` / `OLLAMA_MODEL` | Endpoint e modelo do Ollama |
+| `SMTP_SERVIDOR` / `SMTP_PORTA` / `SMTP_REMETENTE` | Relay de e-mail |
+
+### Banco de dados
+
+Execute no SQL Editor do Supabase, nesta ordem:
+
+```sql
+-- Passo 2
+ALTER TABLE editais ADD COLUMN IF NOT EXISTS texto_extracao text;
+```
+
+E o conteúdo de `sql/002_tentativas_e_fim_projeto.sql` (colunas `tentativas`, `erro_detalhe`, `fim_projeto` e padronização de `prazo_iso` para NULL).
 
 ---
 
-## 💻 Como Executar
+## Execução
 
-O robô roda como um serviço de segundo plano persistente. A cada **2 horas** (intervalo padrão configurável), ele limpa a base de registros antigos, executa a raspagem nos portais e dispara os e-mails pendentes.
-
-Para iniciar o serviço, execute:
 ```bash
 python main.py
 ```
 
----
+A cada 2 horas (`INTERVALO_SEGUNDOS` em `main.py`) o robô executa o ciclo abaixo.
 
-## 📊 Fluxo de Funcionamento Interno
+## Fluxo interno
 
-1. **Faxina Base (`core/db_cleaner.py`):** O robô inicia o ciclo buscando registros cuja data limite de submissão seja anterior ao dia de hoje, alterando seu status para `expirado` para manter a integridade operacional do painel.
-2. **Raspagem dos Portais (`portais/`):** Cada script de portal busca novas URLs de editais de forma cirúrgica. Links novos são pré-extraídos e registrados no Supabase com status `PENDENTE`.
-3. **Esteira de IA (`core/ai_engine.py`):** A fila pendente é consumida. O robô faz a rotação de chaves da API do Gemini caso encontre limites de cota (`429`) e injeta os dados estruturados (prazos, verbas, escopo e palavras-chave técnicas) de volta ao banco.
-4. **Distribuição de Relatórios (`core/reporter.py`):** O sistema varre a tabela `configuracoes_relatorio`. Para cada assinante que completou a janela de 7 dias desde o último envio, as oportunidades criadas no período são filtradas de acordo com as preferências de tags do usuário e disparadas formatadas em HTML contendo os botões com os links fontes originais.
+1. **Limpeza** (`db_cleaner`): editais com prazo anterior a hoje recebem status `expirado`.
+2. **Raspagem** (`portais/`): cada portal localiza URLs novas; o texto bruto vai para `texto_extracao` e o registro nasce com status `PENDENTE`.
+3. **Esteira de IA** (`ai_engine`): o Ollama lê `texto_extracao` (limitado a `MAX_CHARS_TEXTO_IA` caracteres, mantendo início e fim) e devolve JSON. A resposta passa por `ai_validator` (tipos, datas, tags) antes de ir ao banco, e o status vira `CONCLUIDO`. O texto bruto é mantido para reprocessamento.
+4. **Retrabalho**: editais com `erro_sem_texto` são raspados de novo pelo `recuperar` do respectivo portal.
+5. **Tentativas**: cada falha de scraping ou de IA incrementa `tentativas`. Ao atingir `MAX_TENTATIVAS` (padrão 3) o status vira `falha_definitiva` e o edital sai da fila; o motivo fica em `erro_detalhe`. Se o Ollama estiver fora do ar, a fila é interrompida sem gastar tentativas.
+6. **Prazo**: apenas o prazo de *submissão* (`prazo_iso`) define se o edital venceu. Prazo desconhecido fica `NULL`; o fim do projeto fica em `fim_projeto`.
+
+### Status de `editais.status_ia`
+
+`PENDENTE` · `erro_sem_texto` · `erro_ia` · `CONCLUIDO` · `descartado_vencido` · `falha_definitiva` · `expirado`
+7. **Relatórios** (`reporter`): para cada assinante em `configuracoes_relatorio` com 7+ dias desde o último envio, os editais novos são filtrados por tags e enviados em HTML.
+
+## Segurança
+
+- O `.env` está no `.gitignore`. Nunca faça commit de chaves.
+- Se alguma chave já foi publicada em repositório, **revogue/rotacione** no painel do Supabase.
+- O robô usa `service_role`; o front-end (UI) deve usar apenas a chave publishable com RLS permitindo somente `SELECT`.
