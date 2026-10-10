@@ -19,6 +19,7 @@ meu_projeto/
 ├── core/
 │   ├── __init__.py
 │   ├── ai_engine.py       # Fila de IA (Ollama) e retrabalho
+│   ├── ai_validator.py    # Validação/normalização da resposta do LLM
 │   ├── db_cleaner.py      # Marca editais vencidos como expirados
 │   └── reporter.py        # Relatórios semanais por e-mail
 │
@@ -90,11 +91,14 @@ Preencha o `.env`:
 
 ### Banco de dados
 
-Execute no SQL Editor do Supabase:
+Execute no SQL Editor do Supabase, nesta ordem:
 
 ```sql
+-- Passo 2
 ALTER TABLE editais ADD COLUMN IF NOT EXISTS texto_extracao text;
 ```
+
+E o conteúdo de `sql/002_tentativas_e_fim_projeto.sql` (colunas `tentativas`, `erro_detalhe`, `fim_projeto` e padronização de `prazo_iso` para NULL).
 
 ---
 
@@ -110,9 +114,15 @@ A cada 2 horas (`INTERVALO_SEGUNDOS` em `main.py`) o robô executa o ciclo abaix
 
 1. **Limpeza** (`db_cleaner`): editais com prazo anterior a hoje recebem status `expirado`.
 2. **Raspagem** (`portais/`): cada portal localiza URLs novas; o texto bruto vai para `texto_extracao` e o registro nasce com status `PENDENTE`.
-3. **Esteira de IA** (`ai_engine`): o Ollama lê `texto_extracao` e preenche título, datas, escopo, subvenção e tags, passando o status para `CONCLUIDO`. O texto bruto é mantido para permitir reprocessamento.
+3. **Esteira de IA** (`ai_engine`): o Ollama lê `texto_extracao` (limitado a `MAX_CHARS_TEXTO_IA` caracteres, mantendo início e fim) e devolve JSON. A resposta passa por `ai_validator` (tipos, datas, tags) antes de ir ao banco, e o status vira `CONCLUIDO`. O texto bruto é mantido para reprocessamento.
 4. **Retrabalho**: editais com `erro_sem_texto` são raspados de novo pelo `recuperar` do respectivo portal.
-5. **Relatórios** (`reporter`): para cada assinante em `configuracoes_relatorio` com 7+ dias desde o último envio, os editais novos são filtrados por tags e enviados em HTML.
+5. **Tentativas**: cada falha de scraping ou de IA incrementa `tentativas`. Ao atingir `MAX_TENTATIVAS` (padrão 3) o status vira `falha_definitiva` e o edital sai da fila; o motivo fica em `erro_detalhe`. Se o Ollama estiver fora do ar, a fila é interrompida sem gastar tentativas.
+6. **Prazo**: apenas o prazo de *submissão* (`prazo_iso`) define se o edital venceu. Prazo desconhecido fica `NULL`; o fim do projeto fica em `fim_projeto`.
+
+### Status de `editais.status_ia`
+
+`PENDENTE` · `erro_sem_texto` · `erro_ia` · `CONCLUIDO` · `descartado_vencido` · `falha_definitiva` · `expirado`
+7. **Relatórios** (`reporter`): para cada assinante em `configuracoes_relatorio` com 7+ dias desde o último envio, os editais novos são filtrados por tags e enviados em HTML.
 
 ## Segurança
 
