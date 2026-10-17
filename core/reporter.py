@@ -1,3 +1,4 @@
+import html
 import smtplib
 import unicodedata
 from email.mime.multipart import MIMEMultipart
@@ -6,6 +7,21 @@ from datetime import datetime, timedelta
 
 # Importa o config para ler o cliente Supabase e variáveis globais
 import config
+
+def _e(valor):
+    """Escapa texto vindo do banco/IA/sites raspados antes de entrar no HTML do e-mail."""
+    return html.escape("" if valor is None else str(valor))
+
+
+def _url_segura(url):
+    """Só links http(s); qualquer outra coisa vira '#'."""
+    url = str(url or "").strip()
+    return html.escape(url, quote=True) if url.lower().startswith(("http://", "https://")) else "#"
+
+
+# Colunas usadas no e-mail. Nunca select("*"): texto_extracao guarda o texto bruto de editais e PDFs.
+COLUNAS_RELATORIO = "titulo,portal,datas,vigencia_projeto,subvencao,tags_ia,escopo,url"
+
 
 def normalizar_texto_report(texto):
     if not texto: return ""
@@ -64,7 +80,7 @@ def compilar_e_enviar_relatorio_automatico(log_func):
 
         try:
             # Busca editais concluídos gerados nos últimos 7 dias
-            resposta_editais = config.supabase.table("editais").select("*").gte("created_at", data_corte_iso).eq("status_ia", "CONCLUIDO").execute()
+            resposta_editais = config.supabase.table("editais").select(COLUNAS_RELATORIO).gte("created_at", data_corte_iso).eq("status_ia", "CONCLUIDO").execute()
             editais_capturados = resposta_editais.data
         except Exception as e:
             log_func(f"    [X] Falha ao consultar tabela editais para {email_destinatario}: {e}")
@@ -122,14 +138,14 @@ def compilar_e_enviar_relatorio_automatico(log_func):
         for item in editais_filtrados:
             html_corpo += f"""
                 <div class="card">
-                    <h3>{item.get('titulo', 'Edital sem título')}</h3>
+                    <h3>{_e(item.get('titulo') or 'Edital sem título')}</h3>
                     <div class="meta">
-                        <strong>Portal:</strong> {item.get('portal', 'N/A')} | <strong>Prazo:</strong> {item.get('datas', 'A consultar')}<br>
-                        <strong>Vigência:</strong> {item.get('vigencia_projeto', 'N/A')} | <strong>Verba:</strong> {item.get('subvencao', 'N/A')}<br>
-                        <strong>Tags:</strong> <i>{item.get('tags_ia', 'Geral')}</i>
+                        <strong>Portal:</strong> {_e(item.get('portal') or 'N/A')} | <strong>Prazo:</strong> {_e(item.get('datas') or 'A consultar')}<br>
+                        <strong>Vigência:</strong> {_e(item.get('vigencia_projeto') or 'N/A')} | <strong>Verba:</strong> {_e(item.get('subvencao') or 'N/A')}<br>
+                        <strong>Tags:</strong> <i>{_e(item.get('tags_ia') or 'Geral')}</i>
                     </div>
-                    <div class="escopo"><strong>Resumo:</strong> {item.get('escopo', 'Sem resumo.')}</div>
-                    <a href="{item.get('url', '#')}" class="btn-link" target="_blank">VISUALIZAR EDITAL FONTE</a>
+                    <div class="escopo"><strong>Resumo:</strong> {_e(item.get('escopo') or 'Sem resumo.')}</div>
+                    <a href="{_url_segura(item.get('url'))}" class="btn-link" target="_blank">VISUALIZAR EDITAL FONTE</a>
                 </div>
             """
         html_corpo += "</div></body></html>"
