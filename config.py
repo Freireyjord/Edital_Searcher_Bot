@@ -40,18 +40,30 @@ MAX_PDF_MB = int(os.getenv("MAX_PDF_MB", "30"))                    # ignora PDFs
 OCR_MAX_PAGINAS = int(os.getenv("OCR_MAX_PAGINAS", "10"))          # páginas por PDF escaneado
 MAX_CHARS_TEXTO_BRUTO = int(os.getenv("MAX_CHARS_TEXTO_BRUTO", "400000"))  # teto gravado em texto_extracao
 
+# --- RELATÓRIO SEMANAL (agendador próprio, independente do ciclo de scraping/IA) ---
+REPORT_DIA_SEMANA = int(os.getenv("REPORT_DIA_SEMANA", "0"))        # 0=segunda ... 6=domingo
+REPORT_HORA = int(os.getenv("REPORT_HORA", "7"))
+REPORT_MINUTO = int(os.getenv("REPORT_MINUTO", "0"))
+REPORT_MAX_PARALELO = int(os.getenv("REPORT_MAX_PARALELO", "20"))   # e-mails enviados ao mesmo tempo
+REPORT_INTERVALO_CHECAGEM = int(os.getenv("REPORT_INTERVALO_CHECAGEM", "30"))   # segundos entre conferências da agenda
+REPORT_MAX_TENTATIVAS = int(os.getenv("REPORT_MAX_TENTATIVAS", "3"))            # por assinante e por semana
+REPORT_COOLDOWN_SEGUNDOS = int(os.getenv("REPORT_COOLDOWN_SEGUNDOS", "600"))    # espera entre tentativas após falha
+# 0 = só editais INICIADOS na semana. N>0 = também os iniciados nos N dias anteriores que o robô
+# só descobriu nesta semana (rede de segurança contra edital achado depois do relatório da semana dele).
+REPORT_TOLERANCIA_DESCOBERTA_DIAS = int(os.getenv("REPORT_TOLERANCIA_DESCOBERTA_DIAS", "0"))
+
 # Após N falhas (scraping ou IA) o edital vira 'falha_definitiva' e sai da fila
 MAX_TENTATIVAS = int(os.getenv("MAX_TENTATIVAS", "3"))
 
 # --- PROMPT IA RESTRITIVO ---
 PROMPT_BASE_IA = """
 Você é especialista em análise de editais públicos de inovação, tecnologia e pesquisa.
-Extraia somente informações explicitamente existentes no texto fornecido. Nunca invente valores ou qualquer outro tipo de informação.
+Extraia somente informações explicitamente existentes no texto fornecido. Nunca invente valores.
 Caso não encontre uma informação de jeito nenhum, retorne o campo correspondente como "Não encontrada".
 
 Responda ESTRITAMENTE com um JSON válido (sem markdown, sem blocos extras).
 
-+ DIRETRIZES DE CRIAÇÃO DAS TAGS:
+DIRETRIZES DE CRIAÇÃO DAS TAGS:
 Identifique de 3 a 10 palavras-chave ou termos técnicos específicos e profundos que definem o CONTEÚDO TÉCNICO E ESCOPO DO PROJETO deste edital (ex: inteligência artificial, biocombustíveis, previdência complementar, smart cities, telecomunicações). 
 
 Proibições Absolutas:
@@ -61,20 +73,17 @@ Proibições Absolutas:
 
 Insira esses termos técnicos no campo "tags_ia" obrigatoriamente separados por vírgula.
 
-+ DIRETRIZES DE STATUS DO PROJETO:
-A partir das informações adquiridas, analise e classifique o edital/chamado estritamente em uma das seguintes categorias para o campo "status_projeto":
-- "ATIVO": O edital foi lido com sucesso, possui informações relevantes ("datas" e "escopo"/"pesquisa") e as inscrições estão abertas ou programadas para abrir.
-- "ENCERRADO": Se houver menção explícita de "Inscrição Encerrada", "Chamada Encerrada", ou se os prazos descritos deixarem claro que o período de submissão já acabou.
-- "N/A INFO": Conseguiu ler o texto, mas ele não traz informações sobre o que é o projeto (não encontrou dados reais de "pesquisa", "escopo" ou "subvencao").
-- "ATEMPORAL": O edital está aberto/ativo, mas não possui nenhum tipo de data limite ou duração descrita no texto.
-- "PAGINA_ERRO": O texto fornecido indica um erro do servidor do portal, como "Erro 404", "Página não encontrada", "Acesso negado", "Bad Gateway" ou falhas de carregamento de sistema.
-- "NAO_EDITAL": O texto lido pertence a uma página institucional, manual de uso de sistema, termos de privacidade ou notícias do portal, e NÃO se trata de uma oportunidade/chamada pública de edital.
+DATA DE INÍCIO DO EDITAL ("inicio_iso"):
+- É a data de ABERTURA do período de submissão (início das inscrições / envio de propostas).
+- Se o texto trouxer apenas a data de publicação ou lançamento do edital, use essa data.
+- NÃO use a data limite de submissão nem datas de início/vigência do projeto.
+- Se nenhuma dessas datas estiver no texto, retorne "Não encontrada". Nunca invente.
 
 Siga estritamente esta estrutura para o JSON:
 {
   "titulo": "Nome/Título oficial simplificado do edital encontrado",
-  "status_projeto": "ATIVO ou ENCERRADO ou N/A INFO ou ATEMPORAL ou PAGINA_ERRO ou NAO_EDITAL",
-  "datas": "Texto resumido com o prazo limite de submissão do edital no formato 'DD-MM-YY - DD-MM-YY' ou caso ache só a data de abertura 'Iniciado em DD-MM-YY' ou caso só a data de encerramento 'Até DD-MM-YY'",
+  "datas": "Texto resumido com o prazo limite de submissão do edital no formato 'DD-MM-YY - DD-MM-YY' ou caso ache so a data de abertura 'Iniciado em DD-MM-YY' ou caso so a data de encerramento 'Até DD-MM-YY'",
+  "inicio_iso": "Data de abertura/início do edital formatada em YYYY-MM-DD (se encontrada)",
   "prazo_iso": "Data limite de submissão formatada em YYYY-MM-DD (se encontrada)",
   "vigencia_projeto": "Texto resumido com o período/vigência do projeto (ex: Data de início, término ou prorrogações encontradas)",
   "fim_projeto_iso": "Data de término ou prorrogação final do projeto formatada em YYYY-MM-DD (se encontrada)",

@@ -120,6 +120,11 @@ def validar_resultado(bruto):
     if not titulo and not escopo:
         raise ValueError("resposta sem título e sem escopo")
 
+    prazo = parse_data_iso(bruto.get("prazo_iso"))
+    inicio = parse_data_iso(bruto.get("inicio_iso"))
+    if inicio and prazo and inicio > prazo:
+        inicio = None   # incoerente (início depois do prazo): o modelo errou ou trocou as datas
+
     return {
         "titulo": titulo or "Edital sem título",
         "datas": texto_ou_none(bruto.get("datas"), 200) or "A consultar",
@@ -129,6 +134,7 @@ def validar_resultado(bruto):
         "vigencia_projeto": texto_ou_none(bruto.get("vigencia_projeto"), 500) or "Não encontrada",
         "tags_ia": normalizar_tags(bruto.get("tags_ia")),
         # Datas: None quando ausentes/inválidas (vira NULL no banco)
-        "prazo_submissao": parse_data_iso(bruto.get("prazo_iso")),
+        "prazo_submissao": prazo,
+        "inicio_edital": inicio,
         "fim_projeto": parse_data_iso(bruto.get("fim_projeto_iso")),
     }
