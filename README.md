@@ -25,8 +25,11 @@ meu_projeto/
 │
 ├── utils/
 │   ├── __init__.py
-│   ├── scraper_utils.py   # Requisições, limpeza de HTML, registro no banco
-│   └── document_utils.py  # Leitura de PDF (pdfminer / OCR)
+│   ├── scraper_utils.py   # Coleta página + PDFs anexos e registra no banco
+│   ├── document_utils.py  # Download seguro de PDF, pdfminer e OCR (fallback)
+│   ├── pdf_links.py       # Descobre e prioriza PDFs anexos em uma página
+│   ├── texto_utils.py     # Fontes do texto e orçamento de caracteres para a IA
+│   └── http_utils.py      # Sessão HTTP com retry/backoff
 │
 └── portais/               # Um módulo por portal
     ├── __init__.py
@@ -49,7 +52,7 @@ Cada módulo de portal deve expor:
 - **Supabase** (PostgreSQL) para persistência
 - **Ollama** (`qwen2.5:14b-instruct` por padrão) para extração estruturada em JSON
 - **Playwright** + **BeautifulSoup4** para raspagem (SPAs e HTML estático)
-- **pdfminer.six / pypdf / pytesseract** para PDFs
+- **pdfminer.six** para PDFs com texto; **pytesseract + pdf2image** (OCR) como fallback para PDFs escaneados
 
 ---
 
@@ -73,6 +76,12 @@ Instale o [Ollama](https://ollama.com) e baixe o modelo:
 ```bash
 ollama pull qwen2.5:14b-instruct
 ```
+
+### OCR (opcional)
+
+Só é necessário para PDFs escaneados. Sem ele, esses PDFs são ignorados (com aviso no log).
+- **Tesseract** com o idioma `por`. Defina `TESSERACT_CMD` se não estiver no PATH.
+- **Poppler** (usado pelo `pdf2image`). No Windows, defina `POPPLER_PATH` com a pasta `bin`.
 
 ### Variáveis de ambiente
 
@@ -98,7 +107,7 @@ Execute no SQL Editor do Supabase, nesta ordem:
 ALTER TABLE editais ADD COLUMN IF NOT EXISTS texto_extracao text;
 ```
 
-E o conteúdo de `sql/002_tentativas_e_fim_projeto.sql` (colunas `tentativas`, `erro_detalhe`, `fim_projeto` e padronização de `prazo_iso` para NULL).
+E o conteúdo de `sql/004_relatorio_semanal.sql` (colunas `concluido_em` e `ultima_semana_enviada`; **rode antes de subir o novo `ai_engine.py`**) e de `sql/002_tentativas_e_fim_projeto.sql` (colunas `tentativas`, `erro_detalhe`, `fim_projeto` e padronização de `prazo_iso` para NULL).
 
 ---
 
@@ -113,8 +122,8 @@ A cada 2 horas (`INTERVALO_SEGUNDOS` em `main.py`) o robô executa o ciclo abaix
 ## Fluxo interno
 
 1. **Limpeza** (`db_cleaner`): editais com prazo anterior a hoje recebem status `expirado`.
-2. **Raspagem** (`portais/`): cada portal localiza URLs novas; o texto bruto vai para `texto_extracao` e o registro nasce com status `PENDENTE`.
-3. **Esteira de IA** (`ai_engine`): o Ollama lê `texto_extracao` (limitado a `MAX_CHARS_TEXTO_IA` caracteres, mantendo início e fim) e devolve JSON. A resposta passa por `ai_validator` (tipos, datas, tags) antes de ir ao banco, e o status vira `CONCLUIDO`. O texto bruto é mantido para reprocessamento.
+2. **Raspagem** (`portais/`): cada portal localiza URLs novas. Para cada edital, o texto da página e o dos PDFs anexos mais relevantes (até `MAX_PDFS_POR_EDITAL`; resultados, atas e cartilhas são ignorados) são gravados em `texto_extracao`, separados por linhas `=== FONTE: ... ===`. O registro nasce `PENDENTE`.
+3. **Esteira de IA** (`ai_engine`): o Ollama lê `texto_extracao` (limitado a `MAX_CHARS_TEXTO_IA` caracteres; o orçamento é dividido entre página e PDFs, mantendo início e fim de cada fonte) e devolve JSON. A resposta passa por `ai_validator` (tipos, datas, tags) antes de ir ao banco, e o status vira `CONCLUIDO`. O texto bruto é mantido para reprocessamento.
 4. **Retrabalho**: editais com `erro_sem_texto` são raspados de novo pelo `recuperar` do respectivo portal.
 5. **Tentativas**: cada falha de scraping ou de IA incrementa `tentativas`. Ao atingir `MAX_TENTATIVAS` (padrão 3) o status vira `falha_definitiva` e o edital sai da fila; o motivo fica em `erro_detalhe`. Se o Ollama estiver fora do ar, a fila é interrompida sem gastar tentativas.
 6. **Prazo**: apenas o prazo de *submissão* (`prazo_iso`) define se o edital venceu. Prazo desconhecido fica `NULL`; o fim do projeto fica em `fim_projeto`.
@@ -122,7 +131,7 @@ A cada 2 horas (`INTERVALO_SEGUNDOS` em `main.py`) o robô executa o ciclo abaix
 ### Status de `editais.status_ia`
 
 `PENDENTE` · `erro_sem_texto` · `erro_ia` · `CONCLUIDO` · `descartado_vencido` · `falha_definitiva` · `expirado`
-7. **Relatórios** (`reporter`): para cada assinante em `configuracoes_relatorio` com 7+ dias desde o último envio, os editais novos são filtrados por tags e enviados em HTML.
+7. **Relatório semanal** (`reporter` + `agenda_relatorio`): **toda segunda às 07:00** (horário da máquina; ajustável por `REPORT_DIA_SEMANA/HORA/MINUTO`). Roda numa **thread própria**, que confere a agenda a cada 30 s, independente do ciclo de scraping/IA de 2 em 2 horas, então um ciclo longo nunca atrasa nem pula o envio. Todos os assinantes pendentes recebem **ao mesmo tempo** (até `REPORT_MAX_PARALELO` envios simultâneos; cada um com seu filtro de tags). Cada relatório cobre os editais concluídos em `[segunda anterior 07:00, segunda 07:00)` (coluna `concluido_em`), sem buracos nem repetição. Se o robô estiver desligado na segunda, o envio acontece assim que ele voltar, com a mesma janela. `ultima_semana_enviada` controla a agenda; o envio manual da UI não a altera. Assinante novo entra na agenda e recebe a partir da segunda seguinte. Falhas de SMTP: até 3 tentativas por semana, com 10 min de intervalo.
 
 ## Segurança
 

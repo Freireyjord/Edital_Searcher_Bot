@@ -1,5 +1,5 @@
 import os, json, time, requests, importlib, pkgutil
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from playwright.sync_api import sync_playwright
 import config
 import portais
@@ -191,6 +191,7 @@ def analisar_e_gravar(edital, texto, log_func):
         "prazo_iso": prazo.isoformat() if prazo else None,   # NULL quando desconhecido
         "fim_projeto": fim.isoformat() if fim else None,
         "status_ia": "CONCLUIDO",
+        "concluido_em": datetime.now(timezone.utc).isoformat(),   # janela do relatório semanal
         "erro_detalhe": None,
     })
     return "ok"
@@ -218,9 +219,8 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
                  .order("created_at")
                  .execute().data)
     except Exception as e_bd:
-        log_func(f"    [X] Erro chaves: {e_bd}"); return "vazio"
-
-    if not lista_chaves_banco: return "bloqueio_diario"
+        log_func(f"    [X] Erro ao consultar banco: {e_bd}")
+        return "erro"
 
     if not itens:
         return "vazio"
