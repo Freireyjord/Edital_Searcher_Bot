@@ -190,6 +190,7 @@ def analisar_e_gravar(edital, texto, log_func):
         "tags_ia": dados["tags_ia"],
         "prazo_iso": prazo.isoformat() if prazo else None,   # NULL quando desconhecido
         "fim_projeto": fim.isoformat() if fim else None,
+        "inicio_edital": dados["inicio_edital"].isoformat() if dados["inicio_edital"] else None,   # base do relatório semanal
         "status_ia": "CONCLUIDO",
         "concluido_em": datetime.now(timezone.utc).isoformat(),   # janela do relatório semanal
         "erro_detalhe": None,

@@ -48,6 +48,9 @@ REPORT_MAX_PARALELO = int(os.getenv("REPORT_MAX_PARALELO", "20"))   # e-mails en
 REPORT_INTERVALO_CHECAGEM = int(os.getenv("REPORT_INTERVALO_CHECAGEM", "30"))   # segundos entre conferências da agenda
 REPORT_MAX_TENTATIVAS = int(os.getenv("REPORT_MAX_TENTATIVAS", "3"))            # por assinante e por semana
 REPORT_COOLDOWN_SEGUNDOS = int(os.getenv("REPORT_COOLDOWN_SEGUNDOS", "600"))    # espera entre tentativas após falha
+# 0 = só editais INICIADOS na semana. N>0 = também os iniciados nos N dias anteriores que o robô
+# só descobriu nesta semana (rede de segurança contra edital achado depois do relatório da semana dele).
+REPORT_TOLERANCIA_DESCOBERTA_DIAS = int(os.getenv("REPORT_TOLERANCIA_DESCOBERTA_DIAS", "0"))
 
 # Após N falhas (scraping ou IA) o edital vira 'falha_definitiva' e sai da fila
 MAX_TENTATIVAS = int(os.getenv("MAX_TENTATIVAS", "3"))
@@ -70,10 +73,17 @@ Proibições Absolutas:
 
 Insira esses termos técnicos no campo "tags_ia" obrigatoriamente separados por vírgula.
 
+DATA DE INÍCIO DO EDITAL ("inicio_iso"):
+- É a data de ABERTURA do período de submissão (início das inscrições / envio de propostas).
+- Se o texto trouxer apenas a data de publicação ou lançamento do edital, use essa data.
+- NÃO use a data limite de submissão nem datas de início/vigência do projeto.
+- Se nenhuma dessas datas estiver no texto, retorne "Não encontrada". Nunca invente.
+
 Siga estritamente esta estrutura para o JSON:
 {
   "titulo": "Nome/Título oficial simplificado do edital encontrado",
   "datas": "Texto resumido com o prazo limite de submissão do edital no formato 'DD-MM-YY - DD-MM-YY' ou caso ache so a data de abertura 'Iniciado em DD-MM-YY' ou caso so a data de encerramento 'Até DD-MM-YY'",
+  "inicio_iso": "Data de abertura/início do edital formatada em YYYY-MM-DD (se encontrada)",
   "prazo_iso": "Data limite de submissão formatada em YYYY-MM-DD (se encontrada)",
   "vigencia_projeto": "Texto resumido com o período/vigência do projeto (ex: Data de início, término ou prorrogações encontradas)",
   "fim_projeto_iso": "Data de término ou prorrogação final do projeto formatada em YYYY-MM-DD (se encontrada)",
