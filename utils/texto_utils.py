@@ -7,6 +7,7 @@ o orçamento de caracteres seja dividido entre as fontes (e não que um PDF enor
 engula todo o contexto).
 """
 import re
+import unicodedata
 
 MARCADOR_FONTE = "=== FONTE:"
 _MARCA_OMISSAO = "\n[... trecho intermediário omitido por tamanho ...]\n"
@@ -82,3 +83,37 @@ def preparar_texto_para_ia(texto, limite):
     disponivel = limite - 2 * (len(secoes) - 1)   # separadores "\n\n"
     cotas = distribuir_orcamento([len(s) for s in secoes], disponivel)
     return "\n\n".join(cortar_head_tail(s, c) for s, c in zip(secoes, cotas))
+
+
+# ---------------------------------------------------------------------------
+# Detectores de conteúdo imprestável / edital já encerrado
+# ---------------------------------------------------------------------------
+def _sem_acentos(txt):
+    txt = unicodedata.normalize("NFD", str(txt or "").lower())
+    return "".join(c for c in txt if unicodedata.category(c) != "Mn")
+
+
+# Mensagens de erro que SPAs/portais mostram no lugar do conteúdo (a IA as "resumiria" como se fossem edital)
+_PAGINA_ERRO = re.compile(
+    r"(oportunidade nao encontrada|pagina nao encontrada|conteudo nao encontrado|"
+    r"page not found|404 not found|acesso negado|access denied)"
+)
+_LIMITE_PAGINA_ERRO = 2000   # só é "página de erro" se o conteúdo útil for curto (edital de verdade é longo)
+
+
+def texto_parece_pagina_erro(texto):
+    """True se o conteúdo útil é basicamente uma tela de erro do portal (ex.: 'Oportunidade não encontrada')."""
+    sem_marcas = re.sub(rf"(?m)^{re.escape(MARCADOR_FONTE)}.*$", "", texto or "").strip()
+    return len(sem_marcas) < _LIMITE_PAGINA_ERRO and bool(_PAGINA_ERRO.search(_sem_acentos(sem_marcas)))
+
+
+# Situação que indica que NÃO há mais submissão aberta
+_ENCERRADO = re.compile(
+    r"(aguardando resultado|cancelad[oa]|encerrad[oa]|resultado do certame|"
+    r"finalizad[oa]|suspens[oa]|homologad[oa]|certame concluido)"
+)
+
+
+def status_indica_encerrado(texto):
+    """True para 'Aguardando resultado do certame', 'Cancelada', 'Encerrada'... (não casa 'encerramento')."""
+    return bool(_ENCERRADO.search(_sem_acentos(texto)))

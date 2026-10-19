@@ -79,6 +79,14 @@ DATA DE INÍCIO DO EDITAL ("inicio_iso"):
 - NÃO use a data limite de submissão nem datas de início/vigência do projeto.
 - Se nenhuma dessas datas estiver no texto, retorne "Não encontrada". Nunca invente.
 
+TÍTULO ("titulo"):
+- Use o título ESPECÍFICO da oportunidade/desafio/chamada descrita no texto.
+- NUNCA use o nome do portal, do programa ou um cabeçalho genérico (ex.: "Oportunidades de Inovação", "Sigitec").
+- Se o texto for só uma mensagem de erro (ex.: "Oportunidade não encontrada") ou não trouxer o conteúdo de um edital, retorne "Não encontrada" em todos os campos.
+
+SITUAÇÃO ("datas"):
+- Se o edital estiver encerrado, cancelado ou aguardando resultado, escreva exatamente essa situação em "datas" (ex.: "Cancelada", "Aguardando resultado do certame").
+
 Siga estritamente esta estrutura para o JSON:
 {
   "titulo": "Nome/Título oficial simplificado do edital encontrado",

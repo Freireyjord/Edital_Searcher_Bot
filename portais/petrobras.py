@@ -4,6 +4,7 @@ from urllib.parse import urljoin
 from playwright.sync_api import sync_playwright
 
 from utils import scraper_utils as web_utils
+from utils.texto_utils import status_indica_encerrado
 
 NOME_PORTAL = "Petrobras - Sigitec"
 URL_REAL_PETROBRAS = "https://sigitec-competitividade.petrobras.com.br/v2/public/opportunities"
@@ -92,13 +93,18 @@ def _coletar_urls(log):
                 """)
 
                 novos = 0
+                encerrados = 0
                 for item in dados_pagina:
+                    # Card "Aguardando resultado do certame" / "Cancelada"...: não há o que submeter
+                    if status_indica_encerrado(item.get("prazo", "")):
+                        encerrados += 1
+                        continue
                     url_completa = urljoin(URL_BASE, item["href"])
                     if url_completa not in urls_validas:
                         urls_validas.add(url_completa)
                         novos += 1
 
-                log(f"        [+] Sucesso: {novos} novos editais catalogados na página {pagina_atual}.")
+                log(f"        [+] Sucesso: {novos} novos editais catalogados na página {pagina_atual} ({encerrados} encerrados/cancelados ignorados).")
 
                 pagina_ativa_antes = page.evaluate(JS_PAGINA_ATIVA)
 

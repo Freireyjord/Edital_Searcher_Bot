@@ -9,6 +9,8 @@ import re
 import unicodedata
 from datetime import date
 
+from utils.texto_utils import status_indica_encerrado
+
 # Valores que significam "vazio" (comparados sem acento e em minúsculas)
 _VAZIOS = {
     "", "nao encontrada", "nao encontrado", "nao localizada", "nao localizado",
@@ -27,6 +29,16 @@ _TAGS_PROIBIDAS_PALAVRAS = re.compile(
 )
 
 ANO_MIN, ANO_MAX = 2000, 2100
+
+# Títulos que são cabeçalho/placeholder (o modelo copia o cabeçalho do portal em vez do título do edital)
+_TITULOS_GENERICOS = {
+    "edital sem titulo", "sem titulo", "edital", "oportunidade", "oportunidades",
+    "oportunidades de inovacao", "oportunidades de inovacao do cenpes",
+}
+
+
+class ConteudoInvalido(ValueError):
+    """Resposta sem informação aproveitável. Repetir a IA não adianta (entrada ruim, temperatura 0)."""
 
 
 def _norm(txt):
@@ -106,6 +118,11 @@ def normalizar_tags(valor, maximo=10):
     return ", ".join(tags) if tags else "Geral"
 
 
+def _titulo_utilizavel(titulo):
+    n = _norm(titulo or "")
+    return bool(n) and n not in _TITULOS_GENERICOS and "nao encontrad" not in n
+
+
 def validar_resultado(bruto):
     """
     Recebe o JSON devolvido pelo LLM e retorna um dict pronto para o banco.
@@ -117,17 +134,22 @@ def validar_resultado(bruto):
     titulo = texto_ou_none(bruto.get("titulo"), 300)
     escopo = texto_ou_none(bruto.get("escopo"), 6000)
 
-    if not titulo and not escopo:
-        raise ValueError("resposta sem título e sem escopo")
+    if not _titulo_utilizavel(titulo):
+        # Antes virava "Edital sem título" e entrava como CONCLUIDO. Agora é descartado.
+        raise ConteudoInvalido(f"sem título específico do edital (veio: {titulo!r})")
 
     prazo = parse_data_iso(bruto.get("prazo_iso"))
     inicio = parse_data_iso(bruto.get("inicio_iso"))
     if inicio and prazo and inicio > prazo:
         inicio = None   # incoerente (início depois do prazo): o modelo errou ou trocou as datas
 
+    datas = texto_ou_none(bruto.get("datas"), 200)
+
     return {
-        "titulo": titulo or "Edital sem título",
-        "datas": texto_ou_none(bruto.get("datas"), 200) or "A consultar",
+        "titulo": titulo,
+        "datas": datas or "A consultar",
+        # situação "Cancelada" / "Aguardando resultado do certame"... e sem prazo aberto
+        "encerrado": prazo is None and status_indica_encerrado(datas or ""),
         "pesquisa": texto_ou_none(bruto.get("pesquisa"), 3000) or "Não encontrada",
         "escopo": escopo or "Não encontrado",
         "subvencao": texto_ou_none(bruto.get("subvencao"), 3000) or "Não encontrada",

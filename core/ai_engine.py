@@ -3,8 +3,8 @@ from datetime import datetime, date, timezone
 from playwright.sync_api import sync_playwright
 import config
 import portais
-from core.ai_validator import validar_resultado
-from utils.texto_utils import preparar_texto_para_ia
+from core.ai_validator import validar_resultado, ConteudoInvalido
+from utils.texto_utils import preparar_texto_para_ia, texto_parece_pagina_erro
 
 # Status possíveis em editais.status_ia
 #   PENDENTE          -> aguardando IA
@@ -13,6 +13,8 @@ from utils.texto_utils import preparar_texto_para_ia
 #   CONCLUIDO         -> processado com sucesso
 #   descartado_vencido-> prazo de submissão já passou
 #   falha_definitiva  -> estourou MAX_TENTATIVAS; sai da fila (revisão manual)
+#   descartado_invalido  -> resposta sem título específico (página vazia/erro/cabeçalho do portal)
+#   descartado_encerrado -> 'Cancelada', 'Aguardando resultado do certame'... (sem submissão aberta)
 #   expirado          -> marcado pelo db_cleaner
 
 
@@ -162,6 +164,11 @@ def analisar_e_gravar(edital, texto, log_func):
 
     try:
         dados = validar_resultado(bruto)
+    except ConteudoInvalido as e:
+        # Entrada sem edital de verdade: não repete a IA (gastaria GPU em loop) e não aparece na lista.
+        _atualizar(edital["url"], {"status_ia": "descartado_invalido", "erro_detalhe": str(e)[:500]})
+        log_func(f"    [🗑️] Descartado: {edital['url']} ({e})")
+        return "descartado"
     except ValueError as e:
         registrar_falha(edital, "erro_ia", f"resposta inválida: {e}", log_func)
         return "falha"
@@ -176,6 +183,16 @@ def analisar_e_gravar(edital, texto, log_func):
             "datas": "Expirado",
             "prazo_iso": prazo.isoformat(),
             "status_ia": "descartado_vencido",
+            "erro_detalhe": None,
+        })
+        return "descartado"
+
+    if dados["encerrado"]:
+        # "Cancelada", "Aguardando resultado do certame"...: não há submissão aberta; some da lista e do relatório.
+        _atualizar(edital["url"], {
+            "titulo": dados["titulo"],
+            "datas": dados["datas"],
+            "status_ia": "descartado_encerrado",
             "erro_detalhe": None,
         })
         return "descartado"
@@ -232,7 +249,7 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
     for idx, edital in enumerate(itens, start=1):
         texto = _texto_do_edital(edital)
 
-        if len(texto) < 100:
+        if len(texto) < 100 or texto_parece_pagina_erro(texto):
             # Transição para o retrabalho (re-scraping). Não conta como tentativa:
             # a falha só é contada se o retrabalho também não conseguir texto.
             log_func(f"    [⚠️] Sem texto para {edital['url']}. Encaminhando ao retrabalho.")
@@ -286,7 +303,7 @@ def executar_retrabalho_editais_com_erro(log_func):
                     time.sleep(2)
                     continue
 
-                if len(txt) < 100:
+                if len(txt) < 100 or texto_parece_pagina_erro(txt):
                     registrar_falha(edital, "erro_sem_texto", "re-scraping continua sem texto", log_func)
                     time.sleep(2)
                     continue

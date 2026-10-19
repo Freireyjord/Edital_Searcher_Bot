@@ -4,7 +4,7 @@ from datetime import datetime
 import config
 from utils.http_utils import SESSAO
 from utils.texto_utils import (  # noqa: F401  (limpar_texto_extraido reexportado p/ compatibilidade)
-    limpar_texto_extraido, montar_texto_com_fontes, tamanho_util,
+    limpar_texto_extraido, montar_texto_com_fontes, tamanho_util, texto_parece_pagina_erro,
 )
 from utils.pdf_links import pares_de_soup, coletar_candidatos, selecionar_pdfs
 from utils.document_utils import extrair_texto_pdf_url, extrair_texto_pdf_bytes
@@ -111,7 +111,7 @@ def processar_pagina_interna(url_edital, ignorar_links, nome_portal, log, atuali
         texto_final = montar_texto_com_fontes(fontes, config.MAX_CHARS_TEXTO_BRUTO)
 
         # --- 3. Sem conteúdo suficiente (página + anexos): registra falha ---
-        if tamanho_util(texto_final) < 100:
+        if tamanho_util(texto_final) < 100 or texto_parece_pagina_erro(texto_final):
             log("        [⚠️] Conteúdo vazio. Registrando falha para o retrabalho.")
             config.supabase.table("editais").insert({
                 "url": url_edital, "portal": nome_portal, "titulo": "Edital Inválido",
