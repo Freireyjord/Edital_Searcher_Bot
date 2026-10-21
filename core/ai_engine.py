@@ -229,13 +229,25 @@ def _texto_do_edital(edital):
     return ""
 
 
-def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
+def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None, apenas_novos=None, limite=None):
+    """
+    apenas_novos=True  -> só editais que ainda não falharam (tentativas = 0): fluxo contínuo.
+    apenas_novos=False -> só retentativas (tentativas > 0).
+    apenas_novos=None  -> todos (comportamento antigo).
+    limite             -> tamanho do lote (evita carregar centenas de textos de uma vez).
+    """
     try:
-        itens = (config.supabase.table("editais").select("*")
-                 .in_("status_ia", ["PENDENTE", "erro_ia"])
-                 .lt("tentativas", config.MAX_TENTATIVAS)
-                 .order("created_at")
-                 .execute().data)
+        consulta = (config.supabase.table("editais").select("*")
+                    .in_("status_ia", ["PENDENTE", "erro_ia"])
+                    .lt("tentativas", config.MAX_TENTATIVAS))
+        if apenas_novos is True:
+            consulta = consulta.eq("tentativas", 0)
+        elif apenas_novos is False:
+            consulta = consulta.gt("tentativas", 0)
+        consulta = consulta.order("created_at")
+        if limite:
+            consulta = consulta.limit(limite)
+        itens = consulta.execute().data
     except Exception as e_bd:
         log_func(f"    [X] Erro ao consultar banco: {e_bd}")
         return "erro"
