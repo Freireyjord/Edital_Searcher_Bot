@@ -118,6 +118,24 @@ def normalizar_tags(valor, maximo=10):
     return ", ".join(tags) if tags else "Geral"
 
 
+def _limpar_datas(txt):
+    """
+    Tira partes "Não encontrada" do texto de datas ("02-09-20 - Não encontrada" -> "Iniciado em 02-09-20").
+    O prompt pede 'DD-MM-YY - DD-MM-YY' (abertura - encerramento); quando o modelo preenche o lado
+    que faltou com "Não encontrada", isso vazava para a coluna Prazo da UI.
+    """
+    if not txt:
+        return None
+    partes = [p.strip() for p in re.split(r"\s+-\s+", txt)]
+    partes = [p for p in partes if p and _norm(p) not in _VAZIOS and "nao encontrad" not in _norm(p)]
+    if not partes:
+        return None
+    limpo = " - ".join(partes)
+    if re.fullmatch(r"\d{2}[-/]\d{2}[-/]\d{2,4}", limpo):      # sobrou só uma data: é a de abertura
+        limpo = f"Iniciado em {limpo}"
+    return limpo
+
+
 def _titulo_utilizavel(titulo):
     n = _norm(titulo or "")
     return bool(n) and n not in _TITULOS_GENERICOS and "nao encontrad" not in n
@@ -143,7 +161,7 @@ def validar_resultado(bruto):
     if inicio and prazo and inicio > prazo:
         inicio = None   # incoerente (início depois do prazo): o modelo errou ou trocou as datas
 
-    datas = texto_ou_none(bruto.get("datas"), 200)
+    datas = _limpar_datas(texto_ou_none(bruto.get("datas"), 200))
 
     return {
         "titulo": titulo,
