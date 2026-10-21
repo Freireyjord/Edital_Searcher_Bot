@@ -88,11 +88,25 @@ def montar_prompt(texto):
     )
 
 
-def extrair_dados_com_ia(texto_analise, url_edital="N/A", nome_portal="Portal"):
+def extrair_dados_com_ia(texto_analise, url_edital="N/A", nome_portal="Portal",
+                         modelo=None, think=None, metricas=None, timeout=None):
     """
     Retorna o JSON bruto do modelo, ou {"erro": msg, "tipo": tipo}.
     tipo: 'conexao' (Ollama fora do ar), 'timeout', 'http', 'json'.
+
+    modelo / think / timeout sobrescrevem a configuração (usado por scripts/comparar_modelos.py).
+    metricas: dict opcional preenchido com tempo total, tokens e velocidade.
     """
+    modelo = modelo or config.OLLAMA_MODEL
+    think = (think or config.OLLAMA_THINK or "auto").lower()
+    timeout = timeout or config.OLLAMA_TIMEOUT
+    metricas = metricas if metricas is not None else {}
+    inicio = time.monotonic()
+
+    def _fim(resultado):
+        metricas["total_s"] = round(time.monotonic() - inicio, 2)
+        return resultado
+
     prompt_completo = montar_prompt(preparar_texto_para_ia(texto_analise, config.MAX_CHARS_TEXTO_IA))
 
     try:
@@ -106,7 +120,7 @@ def extrair_dados_com_ia(texto_analise, url_edital="N/A", nome_portal="Portal"):
         pass
 
     payload = {
-        "model": config.OLLAMA_MODEL,
+        "model": modelo,
         "prompt": prompt_completo,
         "stream": False,
         "format": "json",
@@ -115,42 +129,49 @@ def extrair_dados_com_ia(texto_analise, url_edital="N/A", nome_portal="Portal"):
             "temperature": 0,   # extração: queremos determinismo
         },
     }
+    if think in ("on", "off"):
+        payload["think"] = (think == "on")
 
     try:
-        response = requests.post(config.OLLAMA_URL, json=payload, timeout=config.OLLAMA_TIMEOUT)
+        response = requests.post(config.OLLAMA_URL, json=payload, timeout=timeout)
+        if response.status_code == 400 and "think" in payload and "think" in response.text.lower():
+            payload.pop("think")        # esse modelo não aceita o parâmetro: repete sem ele
+            response = requests.post(config.OLLAMA_URL, json=payload, timeout=timeout)
     except requests.exceptions.Timeout:
-        return {"erro": f"timeout após {config.OLLAMA_TIMEOUT}s", "tipo": "timeout"}
+        return _fim({"erro": f"timeout após {timeout}s", "tipo": "timeout"})
     except requests.exceptions.ConnectionError as e:
-        return {"erro": f"Ollama inacessível: {e}", "tipo": "conexao"}
+        return _fim({"erro": f"Ollama inacessível: {e}", "tipo": "conexao"})
     except requests.exceptions.RequestException as e:
-        return {"erro": f"erro de requisição: {e}", "tipo": "conexao"}
+        return _fim({"erro": f"erro de requisição: {e}", "tipo": "conexao"})
 
     if response.status_code != 200:
-        return {"erro": f"OLLAMA_HTTP_{response.status_code}", "tipo": "http"}
+        return _fim({"erro": f"OLLAMA_HTTP_{response.status_code}", "tipo": "http"})
 
     try:
         res_json = response.json()
     except ValueError as e:
-        return {"erro": f"resposta HTTP não é JSON: {e}", "tipo": "json"}
+        return _fim({"erro": f"resposta HTTP não é JSON: {e}", "tipo": "json"})
 
     eval_count = res_json.get("eval_count", 0)
     eval_duration_ns = res_json.get("eval_duration", 0)
     prompt_eval_count = res_json.get("prompt_eval_count", 0)
+    metricas.update(tokens_saida=eval_count, tokens_entrada=prompt_eval_count, tps=0)
     if eval_duration_ns > 0:
         eval_duration_s = eval_duration_ns / 1e9
         tps = eval_count / eval_duration_s
+        metricas["tps"] = round(tps, 1)
         print(f"      [⚡ Ollama Metrics] Contexto: {prompt_eval_count} tokens | Saída: {eval_count} tokens | Velocidade: {tps:.2f} t/s ({eval_duration_s:.2f}s)")
 
     try:
-        return json.loads(res_json.get("response", ""))
+        return _fim(json.loads(res_json.get("response", "")))
     except (json.JSONDecodeError, TypeError) as e:
-        return {"erro": f"JSON do modelo inválido: {e}", "tipo": "json"}
+        return _fim({"erro": f"JSON do modelo inválido: {e}", "tipo": "json"})
 
 
 def analisar_e_gravar(edital, texto, log_func):
     """
     Pipeline único (usado pela fila e pelo retrabalho): IA -> validação -> banco.
-    Retorna: 'ok' | 'descartado' | 'falha' | 'ollama_offline'
+    Retorna: 'ok' | 'descartado' | 'falha' | 'timeout' | 'ollama_offline'
     """
     bruto = extrair_dados_com_ia(texto, edital["url"], edital["portal"])
 
@@ -159,6 +180,10 @@ def analisar_e_gravar(edital, texto, log_func):
             # Problema de infraestrutura, não do edital: não gasta tentativa.
             log_func(f"    [X] {bruto['erro']}")
             return "ollama_offline"
+        if bruto.get("tipo") == "timeout":
+            # Quem chama decide: pode ser lentidão deste edital ou do modelo inteiro (ex.: modelo de raciocínio).
+            log_func(f"    [⏱️] {bruto['erro']}: {edital['url']}")
+            return "timeout"
         registrar_falha(edital, "erro_ia", bruto["erro"], log_func)
         return "falha"
 
@@ -256,7 +281,8 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None, apenas_novos
         return "vazio"
 
     log_func(f"    [Esteira IA Local] Processando {len(itens)} editais via Ollama...")
-    contagem = {"ok": 0, "descartado": 0, "falha": 0, "sem_texto": 0}
+    contagem = {"ok": 0, "descartado": 0, "falha": 0, "sem_texto": 0, "timeout": 0}
+    timeouts_pendentes = []     # timeouts seguidos ainda sem veredito (edital lento x modelo lento)
 
     for idx, edital in enumerate(itens, start=1):
         texto = _texto_do_edital(edital)
@@ -275,7 +301,28 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None, apenas_novos
         if resultado == "ollama_offline":
             log_func("    [⛔] Ollama indisponível. Interrompendo a fila; será retomada no próximo ciclo.")
             return "ollama_offline"
+
+        if resultado == "timeout":
+            # Um timeout isolado é culpa do edital (gasta tentativa depois). Vários SEGUIDOS indicam problema
+            # do modelo/GPU (ex.: modelo de raciocínio, VRAM): pausa a fila SEM gastar tentativas.
+            timeouts_pendentes.append(edital)
+            if len(timeouts_pendentes) >= config.IA_MAX_TIMEOUTS_SEGUIDOS:
+                log_func(f"    [⛔] {len(timeouts_pendentes)} timeouts seguidos com '{config.OLLAMA_MODEL}' "
+                         f"(OLLAMA_THINK={config.OLLAMA_THINK}). Isso indica modelo lento demais, não problema dos editais: "
+                         f"nenhuma tentativa foi descontada. Verifique OLLAMA_MODEL / OLLAMA_THINK / VRAM (ollama ps).")
+                return "ia_lenta"
+            continue
+
+        # Outro resultado depois dos timeouts: o modelo responde, então a lentidão era dos editais.
+        for ed in timeouts_pendentes:
+            registrar_falha(ed, "erro_ia", f"timeout após {config.OLLAMA_TIMEOUT}s", log_func)
+            contagem["timeout"] += 1
+        timeouts_pendentes.clear()
         contagem[resultado] += 1
+
+    for ed in timeouts_pendentes:       # lote terminou com timeouts isolados
+        registrar_falha(ed, "erro_ia", f"timeout após {config.OLLAMA_TIMEOUT}s", log_func)
+        contagem["timeout"] += 1
 
     log_func(f"    [Esteira IA] Resumo: {contagem}")
     return "sucesso"
@@ -325,6 +372,8 @@ def executar_retrabalho_editais_com_erro(log_func):
                 _atualizar(edital["url"], {"texto_extracao": txt, "status_ia": "PENDENTE"})
 
                 resultado = analisar_e_gravar(edital, txt, log_func)
+                if resultado == "timeout":
+                    registrar_falha(edital, "erro_ia", f"timeout após {config.OLLAMA_TIMEOUT}s", log_func)
                 if resultado == "ollama_offline":
                     log_func("    [⛔] Ollama indisponível. Encerrando retrabalho; textos já recuperados ficam PENDENTES.")
                     break

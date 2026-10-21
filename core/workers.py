@@ -70,6 +70,7 @@ def loop_ia(log, parar=None):
     """
     parar = parar or threading.Event()
     ultimo_retry = None
+    lentidao = 0                # passadas seguidas com 'ia_lenta' (backoff exponencial)
 
     while not parar.is_set():
         espera = config.IA_POLL_SEGUNDOS
@@ -82,7 +83,15 @@ def loop_ia(log, parar=None):
                 if status != "sucesso":          # 'vazio', 'erro' ou 'ollama_offline'
                     break
 
-            if status == "ollama_offline":
+            if status != "ia_lenta":
+                lentidao = 0
+
+            if status == "ia_lenta":
+                lentidao += 1
+                espera = min(config.IA_BACKOFF_OLLAMA_SEGUNDOS * 2 ** (lentidao - 1), 3600)
+                log(f"[⏸️] IA lenta demais (timeouts seguidos). Nova tentativa em {espera / 60:.0f} min "
+                    f"(dobra a cada falha, até 60 min). Corrija OLLAMA_MODEL/OLLAMA_THINK.")
+            elif status == "ollama_offline":
                 log(f"[⏸️] Ollama indisponível. Nova tentativa em {config.IA_BACKOFF_OLLAMA_SEGUNDOS // 60} min.")
                 espera = config.IA_BACKOFF_OLLAMA_SEGUNDOS
             elif status == "erro":
@@ -90,7 +99,7 @@ def loop_ia(log, parar=None):
             elif ultimo_retry is None or time.monotonic() - ultimo_retry >= config.IA_INTERVALO_RETRY_SEGUNDOS:
                 ultimo_retry = time.monotonic()
                 resultado = consumir_fila_pendente_ia(log, apenas_novos=False, limite=config.IA_TAMANHO_LOTE)
-                if resultado == "ollama_offline":
+                if resultado in ("ollama_offline", "ia_lenta"):
                     espera = config.IA_BACKOFF_OLLAMA_SEGUNDOS
                 else:
                     executar_retrabalho_editais_com_erro(log)
