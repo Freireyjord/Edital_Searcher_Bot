@@ -10,11 +10,14 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils.instancia_unica import garantir_instancia_unica
 from core.workers import criar_logger, loop_ia
 from core.reporter import iniciar_agendador_relatorio
+from core.ai_engine import diagnosticar_ollama
 
 if __name__ == "__main__":
     log = criar_logger("IA")
     garantir_instancia_unica("ia", log)
     log("=== WORKER DE IA INICIALIZADO ===")
+    ok_ollama, msg_ollama = diagnosticar_ollama()
+    log(f"[{'✓' if ok_ollama else '⚠️'}] {msg_ollama}")
 
     # Relatório semanal (segunda 07:00): thread própria, independente da fila da IA.
     thread_relatorio, parar_relatorio = iniciar_agendador_relatorio(log)

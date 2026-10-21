@@ -11,7 +11,7 @@ import traceback
 from datetime import datetime
 
 import config
-from core.ai_engine import consumir_fila_pendente_ia, executar_retrabalho_editais_com_erro
+from core.ai_engine import consumir_fila_pendente_ia, executar_retrabalho_editais_com_erro, diagnosticar_ollama
 from core.db_cleaner import limpar_editais_expirados_no_banco
 
 MAX_LOTES_SEGUIDOS = 500    # trava de segurança contra loop sem fim (ex.: banco recusando gravações)
@@ -92,7 +92,8 @@ def loop_ia(log, parar=None):
                 log(f"[⏸️] IA lenta demais (timeouts seguidos). Nova tentativa em {espera / 60:.0f} min "
                     f"(dobra a cada falha, até 60 min). Corrija OLLAMA_MODEL/OLLAMA_THINK.")
             elif status == "ollama_offline":
-                log(f"[⏸️] Ollama indisponível. Nova tentativa em {config.IA_BACKOFF_OLLAMA_SEGUNDOS // 60} min.")
+                log(f"[⏸️] Ollama indisponível. Nova tentativa em {config.IA_BACKOFF_OLLAMA_SEGUNDOS / 60:.0f} min.")
+                log(f"[🔎] Diagnóstico: {diagnosticar_ollama()[1]}")
                 espera = config.IA_BACKOFF_OLLAMA_SEGUNDOS
             elif status == "erro":
                 espera = max(espera, 60)

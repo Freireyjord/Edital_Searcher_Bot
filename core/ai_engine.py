@@ -1,4 +1,5 @@
 import os, json, time, requests, importlib, pkgutil
+from urllib.parse import urlparse
 from datetime import datetime, date, timezone
 from playwright.sync_api import sync_playwright
 import config
@@ -144,6 +145,10 @@ def extrair_dados_com_ia(texto_analise, url_edital="N/A", nome_portal="Portal",
     except requests.exceptions.RequestException as e:
         return _fim({"erro": f"erro de requisição: {e}", "tipo": "conexao"})
 
+    if response.status_code == 404:
+        # Modelo não instalado: vale para TODOS os editais; não pode gastar tentativas de nenhum.
+        return _fim({"erro": f"modelo '{modelo}' não encontrado no Ollama (rode: ollama pull {modelo})", "tipo": "conexao"})
+
     if response.status_code != 200:
         return _fim({"erro": f"OLLAMA_HTTP_{response.status_code}", "tipo": "http"})
 
@@ -166,6 +171,36 @@ def extrair_dados_com_ia(texto_analise, url_edital="N/A", nome_portal="Portal",
         return _fim(json.loads(res_json.get("response", "")))
     except (json.JSONDecodeError, TypeError) as e:
         return _fim({"erro": f"JSON do modelo inválido: {e}", "tipo": "json"})
+
+
+def diagnosticar_ollama(timeout=5):
+    """
+    Confere se o servidor do Ollama responde e se o modelo configurado está instalado.
+    Retorna (ok, mensagem) com orientação objetiva. Não levanta exceção.
+    """
+    p = urlparse(config.OLLAMA_URL)
+    base = f"{p.scheme}://{p.netloc}"
+    try:
+        r = requests.get(base + "/api/tags", timeout=timeout)
+        r.raise_for_status()
+        nomes = [m.get("name", "") for m in r.json().get("models", [])]
+        modelo = config.OLLAMA_MODEL
+        if modelo in nomes or f"{modelo}:latest" in nomes:
+            return True, f"Ollama respondendo em {base}; modelo '{modelo}' instalado."
+        return False, (f"Ollama responde em {base}, mas o modelo '{modelo}' NÃO está instalado "
+                       f"(instalados: {', '.join(nomes) or 'nenhum'}). Rode: ollama pull {modelo}")
+    except requests.exceptions.RequestException as e:
+        if "localhost" in base:
+            alternativa = base.replace("localhost", "127.0.0.1")
+            try:
+                requests.get(alternativa + "/api/tags", timeout=timeout).raise_for_status()
+                return False, (f"'{base}' não responde, mas {alternativa} responde (problema de localhost/IPv6). "
+                               f"Defina OLLAMA_URL={alternativa}/api/generate no .env.")
+            except requests.exceptions.RequestException:
+                pass
+        return False, (f"Nada respondeu em {base} ({type(e).__name__}). O ícone do Ollama aberto NÃO garante que o servidor "
+                       f"esteja de pé. Confira: 'ollama list' no PowerShell; $env:OLLAMA_HOST; "
+                       f"Get-NetTCPConnection -LocalPort 11434; e o log %LOCALAPPDATA%\\Ollama\\server.log")
 
 
 def analisar_e_gravar(edital, texto, log_func):
