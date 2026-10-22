@@ -1,10 +1,10 @@
 import os, json, time, requests, importlib, pkgutil
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from playwright.sync_api import sync_playwright
 import config
 import portais
-from core.ai_validator import validar_resultado
-from utils.texto_utils import preparar_texto_para_ia
+from core.ai_validator import validar_resultado, ConteudoInvalido
+from utils.texto_utils import preparar_texto_para_ia, texto_parece_pagina_erro
 
 # Status possíveis em editais.status_ia
 #   PENDENTE          -> aguardando IA
@@ -13,6 +13,8 @@ from utils.texto_utils import preparar_texto_para_ia
 #   CONCLUIDO         -> processado com sucesso
 #   descartado_vencido-> prazo de submissão já passou
 #   falha_definitiva  -> estourou MAX_TENTATIVAS; sai da fila (revisão manual)
+#   descartado_invalido  -> resposta sem título específico (página vazia/erro/cabeçalho do portal)
+#   descartado_encerrado -> 'Cancelada', 'Aguardando resultado do certame'... (sem submissão aberta)
 #   expirado          -> marcado pelo db_cleaner
 
 
@@ -162,6 +164,11 @@ def analisar_e_gravar(edital, texto, log_func):
 
     try:
         dados = validar_resultado(bruto)
+    except ConteudoInvalido as e:
+        # Entrada sem edital de verdade: não repete a IA (gastaria GPU em loop) e não aparece na lista.
+        _atualizar(edital["url"], {"status_ia": "descartado_invalido", "erro_detalhe": str(e)[:500]})
+        log_func(f"    [🗑️] Descartado: {edital['url']} ({e})")
+        return "descartado"
     except ValueError as e:
         registrar_falha(edital, "erro_ia", f"resposta inválida: {e}", log_func)
         return "falha"
@@ -180,6 +187,16 @@ def analisar_e_gravar(edital, texto, log_func):
         })
         return "descartado"
 
+    if dados["encerrado"]:
+        # "Cancelada", "Aguardando resultado do certame"...: não há submissão aberta; some da lista e do relatório.
+        _atualizar(edital["url"], {
+            "titulo": dados["titulo"],
+            "datas": dados["datas"],
+            "status_ia": "descartado_encerrado",
+            "erro_detalhe": None,
+        })
+        return "descartado"
+
     _atualizar(edital["url"], {
         "titulo": dados["titulo"],
         "datas": dados["datas"],
@@ -190,7 +207,9 @@ def analisar_e_gravar(edital, texto, log_func):
         "tags_ia": dados["tags_ia"],
         "prazo_iso": prazo.isoformat() if prazo else None,   # NULL quando desconhecido
         "fim_projeto": fim.isoformat() if fim else None,
+        "inicio_edital": dados["inicio_edital"].isoformat() if dados["inicio_edital"] else None,   # base do relatório semanal
         "status_ia": "CONCLUIDO",
+        "concluido_em": datetime.now(timezone.utc).isoformat(),   # janela do relatório semanal
         "erro_detalhe": None,
     })
     return "ok"
@@ -218,9 +237,8 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
                  .order("created_at")
                  .execute().data)
     except Exception as e_bd:
-        log_func(f"    [X] Erro chaves: {e_bd}"); return "vazio"
-
-    if not lista_chaves_banco: return "bloqueio_diario"
+        log_func(f"    [X] Erro ao consultar banco: {e_bd}")
+        return "erro"
 
     if not itens:
         return "vazio"
@@ -231,7 +249,7 @@ def consumir_fila_pendente_ia(log_func, atualizar_tabela_func=None):
     for idx, edital in enumerate(itens, start=1):
         texto = _texto_do_edital(edital)
 
-        if len(texto) < 100:
+        if len(texto) < 100 or texto_parece_pagina_erro(texto):
             # Transição para o retrabalho (re-scraping). Não conta como tentativa:
             # a falha só é contada se o retrabalho também não conseguir texto.
             log_func(f"    [⚠️] Sem texto para {edital['url']}. Encaminhando ao retrabalho.")
@@ -285,7 +303,7 @@ def executar_retrabalho_editais_com_erro(log_func):
                     time.sleep(2)
                     continue
 
-                if len(txt) < 100:
+                if len(txt) < 100 or texto_parece_pagina_erro(txt):
                     registrar_falha(edital, "erro_sem_texto", "re-scraping continua sem texto", log_func)
                     time.sleep(2)
                     continue

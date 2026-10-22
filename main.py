@@ -6,7 +6,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from core.db_cleaner import limpar_editais_expirados_no_banco
 from core.ai_engine import consumir_fila_pendente_ia, executar_retrabalho_editais_com_erro
-from core.reporter import compilar_e_enviar_relatorio_automatico
+from core.reporter import iniciar_agendador_relatorio
 
 def log_worker(mensagem):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {mensagem}")
@@ -36,14 +36,21 @@ def executar_ciclo_varredura():
     log_worker(f"Esteira IA finalizada com status: {status_ia}")
     
     executar_retrabalho_editais_com_erro(log_worker)
-    compilar_e_enviar_relatorio_automatico(log_worker)
+    # O relatório semanal NÃO roda mais aqui: tem agendador próprio (core/reporter.py).
     log_worker("=== CICLO DE TRABALHO CONCLUÍDO ===")
 
 if __name__ == "__main__":
     INTERVALO_SEGUNDOS = 7200 
     log_worker("=== SERVIÇO BACKGROUND INICIALIZADO ===")
+
+    # Agendador do relatório semanal: thread própria, confere a agenda a cada 30 s.
+    # Um ciclo de scraping/IA demorado não atrasa nem pula o envio de segunda 07:00.
+    thread_relatorio, parar_relatorio = iniciar_agendador_relatorio(log_worker)
+
     while True:
         try: executar_ciclo_varredura()
-        except KeyboardInterrupt: break
+        except KeyboardInterrupt:
+            parar_relatorio.set()
+            break
         except Exception as e: traceback.print_exc()
         time.sleep(INTERVALO_SEGUNDOS)
