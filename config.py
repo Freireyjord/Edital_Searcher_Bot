@@ -29,6 +29,11 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b-instruct")
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
+# Raciocínio ("thinking") de modelos como Qwen3.5 / DeepSeek-R1:
+#   "auto" = não envia o parâmetro (usa o padrão do modelo; em modelos de raciocínio é LIGADO e lento)
+#   "off"  = desliga o raciocínio   |   "on" = liga
+# Modelos instruct comuns (qwen2.5) não têm raciocínio: deixe "auto". Teste com scripts/comparar_modelos.py.
+OLLAMA_THINK = os.getenv("OLLAMA_THINK", "auto")
 
 # Limite de caracteres do edital enviados à IA. ~3,5 caracteres/token em português:
 # 40.000 chars ≈ 11-12k tokens, deixando folga no num_ctx para prompt + resposta.
@@ -54,6 +59,14 @@ REPORT_TOLERANCIA_DESCOBERTA_DIAS = int(os.getenv("REPORT_TOLERANCIA_DESCOBERTA_
 
 # Após N falhas (scraping ou IA) o edital vira 'falha_definitiva' e sai da fila
 MAX_TENTATIVAS = int(os.getenv("MAX_TENTATIVAS", "3"))
+
+# --- WORKERS (dois processos: main_busca.py e main_ia.py) ---
+INTERVALO_BUSCA_SEGUNDOS = int(os.getenv("INTERVALO_BUSCA_SEGUNDOS", "7200"))      # entre varreduras dos portais
+IA_POLL_SEGUNDOS = int(os.getenv("IA_POLL_SEGUNDOS", "60"))                        # IA confere a fila a cada N s quando ociosa
+IA_TAMANHO_LOTE = int(os.getenv("IA_TAMANHO_LOTE", "20"))                          # editais carregados por vez
+IA_INTERVALO_RETRY_SEGUNDOS = int(os.getenv("IA_INTERVALO_RETRY_SEGUNDOS", "1800"))  # retentativas e retrabalho
+IA_BACKOFF_OLLAMA_SEGUNDOS = int(os.getenv("IA_BACKOFF_OLLAMA_SEGUNDOS", "300"))   # espera se o Ollama estiver fora
+IA_MAX_TIMEOUTS_SEGUIDOS = int(os.getenv("IA_MAX_TIMEOUTS_SEGUIDOS", "3"))         # N timeouts seguidos = problema do modelo, pausa sem gastar tentativa
 
 # --- PROMPT IA RESTRITIVO ---
 PROMPT_BASE_IA = """

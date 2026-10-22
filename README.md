@@ -107,17 +107,26 @@ Execute no SQL Editor do Supabase, nesta ordem:
 ALTER TABLE editais ADD COLUMN IF NOT EXISTS texto_extracao text;
 ```
 
-E o conteúdo de `sql/004_relatorio_semanal.sql` (colunas `concluido_em` e `ultima_semana_enviada`; **rode antes de subir o novo `ai_engine.py`**) e de `sql/002_tentativas_e_fim_projeto.sql` (colunas `tentativas`, `erro_detalhe`, `fim_projeto` e padronização de `prazo_iso` para NULL).
+Depois rode `sql/002_tentativas_e_fim_projeto.sql` (colunas `tentativas`, `erro_detalhe`, `fim_projeto` e padronização de `prazo_iso` para NULL), `sql/004_relatorio_semanal.sql` (`concluido_em` e `ultima_semana_enviada`) e `sql/005_inicio_edital.sql` (`inicio_edital`). **Rode 004 e 005 antes de subir o novo `ai_engine.py`**: ele passa a gravar essas colunas.
 
 ---
 
 ## Execução
 
+O robô roda em **dois processos independentes** que conversam só pelo banco (a busca grava editais `PENDENTE`; a IA os consome):
+
 ```bash
-python main.py
+python main_busca.py     # varre os portais a cada INTERVALO_BUSCA_SEGUNDOS (padrão 2 h) e grava editais novos
+python main_ia.py        # analisa os editais assim que aparecem (confere a fila a cada 60 s) + relatório semanal
 ```
 
-A cada 2 horas (`INTERVALO_SEGUNDOS` em `main.py`) o robô executa o ciclo abaixo.
+Rode **os dois** (dois terminais, ou duas tarefas do Agendador de Tarefas do Windows: "ao iniciar o computador" e "executar estando o usuário conectado ou não"). Se um parar, a outra metade do fluxo para: sem `main_busca` não entram editais novos; sem `main_ia` nada é analisado e **o relatório de segunda não sai** (o agendador vive no `main_ia`).
+
+Cada papel só admite **uma instância** (lock em `.locks/`): iniciar um segundo `main_ia.py` encerra com aviso, o que evita análise em dobro e e-mails duplicados.
+
+- A IA processa editais novos em lotes (`IA_TAMANHO_LOTE`) sem esperar a varredura terminar.
+- Retentativas (`erro_ia`) e retrabalho (re-scraping) rodam a cada `IA_INTERVALO_RETRY_SEGUNDOS` (30 min): um edital que falhou não é repetido em sequência.
+- Ollama fora do ar: a IA espera `IA_BACKOFF_OLLAMA_SEGUNDOS` (5 min) e tenta de novo.
 
 ## Fluxo interno
 
@@ -131,10 +140,19 @@ A cada 2 horas (`INTERVALO_SEGUNDOS` em `main.py`) o robô executa o ciclo abaix
 ### Status de `editais.status_ia`
 
 `PENDENTE` · `erro_sem_texto` · `erro_ia` · `CONCLUIDO` · `descartado_vencido` · `falha_definitiva` · `expirado`
-7. **Relatório semanal** (`reporter` + `agenda_relatorio`): **toda segunda às 07:00** (horário da máquina; ajustável por `REPORT_DIA_SEMANA/HORA/MINUTO`). Roda numa **thread própria**, que confere a agenda a cada 30 s, independente do ciclo de scraping/IA de 2 em 2 horas, então um ciclo longo nunca atrasa nem pula o envio. Todos os assinantes pendentes recebem **ao mesmo tempo** (até `REPORT_MAX_PARALELO` envios simultâneos; cada um com seu filtro de tags). Cada relatório cobre os editais concluídos em `[segunda anterior 07:00, segunda 07:00)` (coluna `concluido_em`), sem buracos nem repetição. Se o robô estiver desligado na segunda, o envio acontece assim que ele voltar, com a mesma janela. `ultima_semana_enviada` controla a agenda; o envio manual da UI não a altera. Assinante novo entra na agenda e recebe a partir da segunda seguinte. Falhas de SMTP: até 3 tentativas por semana, com 10 min de intervalo.
+7. **Relatório semanal** (`reporter` + `agenda_relatorio`): **toda segunda às 07:00** (horário da máquina; ajustável por `REPORT_DIA_SEMANA/HORA/MINUTO`). Roda numa **thread própria**, que confere a agenda a cada 30 s, independente do ciclo de scraping/IA de 2 em 2 horas, então um ciclo longo nunca atrasa nem pula o envio. Todos os assinantes pendentes recebem **ao mesmo tempo** (até `REPORT_MAX_PARALELO` envios simultâneos; cada um com seu filtro de tags). Cada relatório traz os editais **iniciados** de segunda a domingo da semana anterior (coluna `inicio_edital`, extraída pela IA). Edital **sem data de início identificada** entra como recente (vale o momento em que ficou `CONCLUIDO`, coluna `concluido_em`). Cada edital aparece em uma única semana. Se o robô estiver desligado na segunda, o envio acontece assim que ele voltar, com a mesma janela. `ultima_semana_enviada` controla a agenda; o envio manual da UI não a altera. Assinante novo entra na agenda e recebe a partir da segunda seguinte. Falhas de SMTP: até 3 tentativas por semana, com 10 min de intervalo.
 
 ## Segurança
 
 - O `.env` está no `.gitignore`. Nunca faça commit de chaves.
 - Se alguma chave já foi publicada em repositório, **revogue/rotacione** no painel do Supabase.
 - O robô usa `service_role`; o front-end (UI) deve usar apenas a chave publishable com RLS permitindo somente `SELECT`.
+
+## Solução de problemas da IA
+
+**`timeout após 180s` em todos os editais** (ou o log `N timeouts seguidos`): o modelo está lento demais. Os suspeitos:
+- **Modelo de raciocínio** (Qwen3.5, DeepSeek-R1...): "pensa" milhares de tokens antes do JSON. Teste `OLLAMA_THINK=off` ou use um modelo *instruct* (`qwen2.5:14b-instruct`).
+- **Modelo grande demais para a VRAM** (ex.: 27B em GPU de 12 GB): parte roda na CPU. Confira a coluna `PROCESSOR` em `ollama ps`.
+- Antes de trocar de modelo em produção, compare com `python scripts/comparar_modelos.py --modelos A B --think auto off --n 5`.
+
+Vários timeouts **seguidos** pausam a fila sem gastar tentativas dos editais (espera 5, 10, 20... até 60 min).

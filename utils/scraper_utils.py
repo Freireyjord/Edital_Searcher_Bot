@@ -6,6 +6,7 @@ from utils.http_utils import SESSAO
 from utils.texto_utils import (  # noqa: F401  (limpar_texto_extraido reexportado p/ compatibilidade)
     limpar_texto_extraido, montar_texto_com_fontes, tamanho_util, texto_parece_pagina_erro,
 )
+from utils.url_utils import canonicalizar_url
 from utils.pdf_links import pares_de_soup, coletar_candidatos, selecionar_pdfs
 from utils.document_utils import extrair_texto_pdf_url, extrair_texto_pdf_bytes
 
@@ -66,6 +67,8 @@ def processar_pagina_interna(url_edital, ignorar_links, nome_portal, log, atuali
     links_extra: lista de (href, rótulo) coletada pelo portal (SPA), para achar PDFs anexos.
     """
     try:
+        url_edital = canonicalizar_url(url_edital)   # '#aba-x' e '#aba-y' são a mesma página
+
         if any(ign in url_edital.lower() for ign in ignorar_links):
             return False
 
