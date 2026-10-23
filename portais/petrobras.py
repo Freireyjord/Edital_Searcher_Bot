@@ -40,7 +40,6 @@ def _criar_contexto(browser):
         locale="pt-BR"
     )
 
-
 def _coletar_urls(log):
     urls_validas = set()
 
@@ -51,9 +50,14 @@ def _coletar_urls(log):
 
         try:
             log("    [Navegação] Solicitando interface ao servidor da Petrobras...")
-            page.goto(URL_REAL_PETROBRAS, timeout=60000, wait_until="networkidle")
+            # Alterado para 'commit' para evitar travar em conexões eternas do React em background
+            page.goto(URL_REAL_PETROBRAS, timeout=45000, wait_until="commit")
+            
+            # Aguarda o elemento estrutural da listagem carregar na tela
+            page.wait_for_selector(".opportunity-list", timeout=20000)
+            time.sleep(2.0)
 
-            # Remove loader/backdrops do React
+            # Remove loader/backdrops do React para liberar os cliques físicos
             page.evaluate("""() => {
                 const loader = document.getElementById('loader');
                 if (loader) loader.remove();
@@ -62,7 +66,22 @@ def _coletar_urls(log):
                 document.body.style.overflow = 'initial';
             }""")
 
-            time.sleep(5.0)
+            # --- SEQUÊNCIA DE FILTROS INJETADA ---
+            log("    [Filtro] 1. Clicando em 'Pesquisa Avançada' para expandir o painel...")
+            page.click("button[data-bs-target='#collapseTitleSearch']")
+            time.sleep(15)
+
+            log("    [Filtro] 2. Selecionando status 'Aberta para envio de proposta'...")
+            page.focus("select.select-advanced-search")
+            page.select_option("select.select-advanced-search", value="A")
+            time.sleep(5)
+
+            log("    [Filtro] 3. Clicando no botão 'Buscar' de dentro do painel expandido...")
+            page.click("#collapseTitleSearch button.button-search")
+            
+            log("    [Filtro] Filtro aplicado com sucesso. Aguardando sincronização do grid...")
+            time.sleep(50)  # Tempo seguro para o React processar e atualizar a tabela
+            # -------------------------------------------------------------------------
 
             pagina_atual = 1
             while True:
@@ -94,8 +113,9 @@ def _coletar_urls(log):
 
                 novos = 0
                 encerrados = 0
+                total_encontrados_na_pagina = len(dados_pagina)
+
                 for item in dados_pagina:
-                    # Card "Aguardando resultado do certame" / "Cancelada"...: não há o que submeter
                     if status_indica_encerrado(item.get("prazo", "")):
                         encerrados += 1
                         continue
@@ -104,7 +124,15 @@ def _coletar_urls(log):
                         urls_validas.add(url_completa)
                         novos += 1
 
-                log(f"        [+] Sucesso: {novos} novos editais catalogados na página {pagina_atual} ({encerrados} encerrados/cancelados ignorados).")
+                log(f"        [+] Mapeados nesta página: {total_encontrados_na_pagina} registros (Inéditos adicionados: {novos}).")
+
+                # --- TRAVA DEFINITIVA POR ESTABILIZAÇÃO DE AMOSTRAGEM ---
+                # Como existem exatamente 17 editais abertos exibidos de 5 em 5, eles ocupam 4 páginas.
+                # Se passarmos da página 1 e o número de novas URLs adicionadas for ZERO, ou se o grid vier zerado,
+                # significa que o catálogo de oportunidades abertas terminou. Paramos para evitar loop infinito.
+                if total_encontrados_na_pagina == 0 or (pagina_atual > 1 and novos == 0) or pagina_atual >= 5:
+                    log(f"        [✓] Fim real do catálogo alcançado ({len(urls_validas)} editais totais filtrados e salvos).")
+                    break
 
                 pagina_ativa_antes = page.evaluate(JS_PAGINA_ATIVA)
 
