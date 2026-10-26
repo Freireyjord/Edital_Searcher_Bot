@@ -269,7 +269,9 @@ def analisar_e_gravar(edital, texto, log_func):
         "fim_projeto": fim.isoformat() if fim else None,
         "inicio_edital": dados["inicio_edital"].isoformat() if dados["inicio_edital"] else None,   # base do relatório semanal
         "status_ia": "CONCLUIDO",
-        "concluido_em": datetime.now(timezone.utc).isoformat(),   # janela do relatório semanal
+        # Janela do relatório semanal. Só carimba na PRIMEIRA conclusão: reprocessar um edital antigo (novo modelo,
+        # novo prompt) não pode fazê-lo parecer "novo desta semana".
+        "concluido_em": edital.get("concluido_em") or datetime.now(timezone.utc).isoformat(),
         "erro_detalhe": None,
     })
     return "ok"
