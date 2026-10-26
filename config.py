@@ -26,14 +26,16 @@ os.makedirs(DIRETORIO_PDFS, exist_ok=True)
 
 # --- CONFIGURAÇÃO OLLAMA (IA LOCAL) ---
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b-instruct")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3.5:9b")
 OLLAMA_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
 # Raciocínio ("thinking") de modelos como Qwen3.5 / DeepSeek-R1:
 #   "auto" = não envia o parâmetro (usa o padrão do modelo; em modelos de raciocínio é LIGADO e lento)
 #   "off"  = desliga o raciocínio   |   "on" = liga
 # Modelos instruct comuns (qwen2.5) não têm raciocínio: deixe "auto". Teste com scripts/comparar_modelos.py.
-OLLAMA_THINK = os.getenv("OLLAMA_THINK", "auto")
+# Benchmark (scripts/comparar_modelos.py, 5 editais): qwen3.5:9b com "off" = 15 s/edital e 5/5 JSON válidos;
+# com "auto" gasta ~3.000-4.800 tokens pensando (100-180 s) e 2 de 5 respostas vieram inválidas.
+OLLAMA_THINK = os.getenv("OLLAMA_THINK", "off")
 
 # Limite de caracteres do edital enviados à IA. ~3,5 caracteres/token em português:
 # 40.000 chars ≈ 11-12k tokens, deixando folga no num_ctx para prompt + resposta.
@@ -91,6 +93,14 @@ DATA DE INÍCIO DO EDITAL ("inicio_iso"):
 - Se o texto trouxer apenas a data de publicação ou lançamento do edital, use essa data.
 - NÃO use a data limite de submissão nem datas de início/vigência do projeto.
 - Se nenhuma dessas datas estiver no texto, retorne "Não encontrada". Nunca invente.
+
+PRAZO DE SUBMISSÃO ("prazo_iso"):
+- É SOMENTE a data limite para enviar propostas/inscrições.
+- Data de publicação, de abertura ou de resultado NÃO é prazo. Se não houver data limite, retorne "Não encontrada".
+- Se o texto indicar que a inscrição está "Encerrada", escreva "Encerrada" em "datas" e retorne "Não encontrada" em "prazo_iso".
+
+FORMATO DAS DATAS:
+- Algumas páginas usam MM/DD/AA (ex.: "03/23/02" = 23 de março de 2002). Converta SEMPRE para YYYY-MM-DD; se um dos números for maior que 12, ele é o dia.
 
 TÍTULO ("titulo"):
 - Use o título ESPECÍFICO da oportunidade/desafio/chamada descrita no texto.

@@ -168,7 +168,7 @@ raciocínio ligado (2 de 5 respostas inválidas). Rode `scripts/comparar_modelos
 
 **`timeout após 180s` em todos os editais** (ou o log `N timeouts seguidos`): o modelo está lento demais. Os suspeitos:
 - **Modelo de raciocínio** (Qwen3.5, DeepSeek-R1...): "pensa" milhares de tokens antes do JSON. Teste `OLLAMA_THINK=off` ou use um modelo *instruct* (`qwen2.5:14b-instruct`).
-- **Modelo grande demais para a VRAM** (ex.: 27B em GPU de 12 GB): parte roda na CPU. Confira a coluna `PROCESSOR` em `ollama ps`.
+- **Modelo grande demais para a VRAM** (ex.: 27B em GPU de 8 GB): parte roda na CPU. Confira a coluna `PROCESSOR` em `ollama ps`.
 - Antes de trocar de modelo em produção, compare com `python scripts/comparar_modelos.py --modelos A B --think auto off --n 5`.
 
 Vários timeouts **seguidos** pausam a fila sem gastar tentativas dos editais (espera 5, 10, 20... até 60 min).

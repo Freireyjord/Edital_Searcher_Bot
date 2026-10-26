@@ -160,6 +160,8 @@ def validar_resultado(bruto):
     inicio = parse_data_iso(bruto.get("inicio_iso"))
     if inicio and prazo and inicio > prazo:
         inicio = None   # incoerente (início depois do prazo): o modelo errou ou trocou as datas
+    if inicio and prazo and inicio == prazo:
+        prazo = None    # mesma data nos dois: quase certamente é a data de PUBLICAÇÃO lida como prazo
 
     datas = _limpar_datas(texto_ou_none(bruto.get("datas"), 200))
 
