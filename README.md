@@ -148,6 +148,22 @@ Cada papel só admite **uma instância** (lock em `.locks/`): iniciar um segundo
 - Se alguma chave já foi publicada em repositório, **revogue/rotacione** no painel do Supabase.
 - O robô usa `service_role`; o front-end (UI) deve usar apenas a chave publishable com RLS permitindo somente `SELECT`.
 
+## Adicionando um portal novo
+
+1. Crie `portais/<nome>.py` com: `NOME_PORTAL = "Nome - Descrição"` (o filtro da UI usa o texto antes do ` - `),
+   `varrer(log, atualizar_tabela_func=None)` e, para SPAs, `recuperar(page, url)`. Os portais são descobertos sozinhos pela pasta.
+2. Despache cada edital com `web_utils.processar_pagina_interna(url, [], NOME_PORTAL, log, None)`. Pule cards já encerrados/cancelados.
+3. **Teste sem gravar nada:** `python scripts/testar_portal.py <nome> --max 15 --amostra 3`
+   (mostra URLs coletadas, quantas já existem no banco, duplicatas e a qualidade do texto; o Supabase fica só-leitura).
+4. Confira todos os portais de uma vez: `python scripts/testar_portal.py --contrato`.
+5. Só então abra o PR para a `main`. Branch com um único portal deve alterar só `portais/<nome>.py`.
+
+## Modelo recomendado
+
+`qwen3.5:9b` com `OLLAMA_THINK=off` (padrão do `config.py`). No benchmark com 5 editais reais: ~15 s por edital e 5/5 JSON válidos,
+contra ~57 s do `qwen2.5:14b-instruct` (que não cabe inteiro numa GPU de 12 GB: roda a 4-8 tokens/s) e ~176 s do `qwen3.5:9b` com o
+raciocínio ligado (2 de 5 respostas inválidas). Rode `scripts/comparar_modelos.py` sempre que trocar de modelo ou de prompt.
+
 ## Solução de problemas da IA
 
 **`timeout após 180s` em todos os editais** (ou o log `N timeouts seguidos`): o modelo está lento demais. Os suspeitos:
