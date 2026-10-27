@@ -31,7 +31,7 @@ from core.agenda_relatorio import (
 )
 
 # Colunas usadas no e-mail. Nunca select("*"): texto_extracao guarda o texto bruto de editais e PDFs.
-COLUNAS_RELATORIO = "titulo,portal,datas,vigencia_projeto,subvencao,tags_ia,escopo,url,inicio_edital"
+COLUNAS_RELATORIO = "titulo,portal,prazo_iso,vigencia_projeto,subvencao,tags_ia,escopo,url,inicio_edital"
 TAMANHO_PAGINA = 1000
 
 # Estado em memória (por processo): evita reenvio em loop se a gravação no banco falhar
@@ -75,10 +75,15 @@ def _utc_iso(momento):
 
 
 def _paginar(cliente, aplicar):
-    """Consulta paginada de editais CONCLUIDOS; `aplicar(query)` acrescenta os filtros do grupo."""
+    """Consulta paginada de editais CONCLUIDOS que possuem prazo obrigatoriamente preenchido."""
     itens, de = [], 0
     while True:
-        consulta = cliente.table("editais").select(COLUNAS_RELATORIO).eq("status_ia", "CONCLUIDO")
+        # Inserido o filtro restritivo .not_.is_("prazo_iso", "null")
+        consulta = (cliente.table("editais")
+                    .select(COLUNAS_RELATORIO)
+                    .eq("status_ia", "CONCLUIDO")
+                    .not_.is_("prazo_iso", "null"))
+        
         resposta = aplicar(consulta).order("url").range(de, de + TAMANHO_PAGINA - 1).execute()
         lote = resposta.data or []
         itens.extend(lote)
@@ -137,13 +142,14 @@ def _filtrar_editais(editais, deve_filtrar, tags_brutas):
 # ---------------------------------------------------------------------------
 # E-mail
 # ---------------------------------------------------------------------------
-def _fmt_inicio(item):
-    """'2026-10-14' -> '14/10/2026'; sem data -> aviso de que entrou como edital novo na base."""
-    bruto = str(item.get("inicio_edital") or "")[:10]
+def _fmt_data(valor_str):
+    """Converte 'YYYY-MM-DD' para 'DD/MM/YYYY' para exibição limpa no e-mail."""
+    if not valor_str:
+        return "não identificado"
     try:
-        return datetime.strptime(bruto, "%Y-%m-%d").strftime("%d/%m/%Y")
+        return datetime.strptime(str(valor_str)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
     except ValueError:
-        return "não identificado*"
+        return "não identificado"
 
 
 def _montar_html(editais, inicio, fim, gerado_em):
@@ -171,8 +177,8 @@ def _montar_html(editais, inicio, fim, gerado_em):
                 <div class="card">
                     <h3>{_e(item.get('titulo') or 'Edital sem título')}</h3>
                     <div class="meta">
-                        <strong>Portal:</strong> {_e(item.get('portal') or 'N/A')} | <strong>Início:</strong> {_fmt_inicio(item)} | <strong>Prazo:</strong> {_e(item.get('datas') or 'A consultar')}<br>
-                        <strong>Vigência:</strong> {_e(item.get('vigencia_projeto') or 'N/A')} | <strong>Verba:</strong> {_e(item.get('subvencao') or 'N/A')}<br>
+                        <strong>Portal:</strong> {_e(item.get('portal') or 'N/A')} | <strong>Início:</strong> {_fmt_data(item.get('inicio_edital'))} | <strong>Prazo Final:</strong> {_fmt_data(item.get('prazo_iso'))}<br>
+                        <strong>Vigência do Projeto:</strong> {_e(item.get('vigencia_projeto') or 'N/A')} | <strong>Verba/Financiamento:</strong> {_e(item.get('subvencao') or 'N/A')}<br>
                         <strong>Tags:</strong> <i>{_e(item.get('tags_ia') or 'Geral')}</i>
                     </div>
                     <div class="escopo"><strong>Resumo:</strong> {_e(item.get('escopo') or 'Sem resumo.')}</div>
@@ -263,18 +269,36 @@ def executar_relatorio_semanal(log_func, cliente=None, agora=None, estado=None):
     log_func(f"    [📅 RELATÓRIO] {len(editais)} edital(is) iniciado(s) na janela "
              f"({sem_inicio} sem data de início, incluídos como recentes).")
 
+    MAX_EDITAIS_POR_EMAIL = 20  # Teto seguro para evitar que o HTML exceda o tamanho limite do SMTP
     jobs, sem_conteudo = [], []
+    
     for perfil in pendentes:
         selecionados = _filtrar_editais(editais, perfil.get("filtrar_por_tags", False), perfil.get("tags_exclusivas"))
         if not selecionados:
             sem_conteudo.append(perfil["id"])
             continue
-        jobs.append({
-            "id": perfil["id"],
-            "email": perfil["email_destino"].strip(),
-            "assunto": f"📋 Relatório PCE Semanal - {len(selecionados)} Novos Editais Encontrados",
-            "html": _montar_html(selecionados, inicio, fim, agora),
-        })
+            
+        # 🚨 FATIAMENTO: Divide a lista em blocos menores se houver uma explosão de editais novos
+        total_editais = len(selecionados)
+        if total_editais > MAX_EDITAIS_POR_EMAIL:
+            log_func(f"    [📦 FATIAMENTO] {perfil['email_destino']} gerou {total_editais} editais. Fatiando em blocos de {MAX_EDITAIS_POR_EMAIL}...")
+            
+            fatias = [selecionados[i:i + MAX_EDITAIS_POR_EMAIL] for i in range(0, total_editais, MAX_EDITAIS_POR_EMAIL)]
+            for idx, fatia in enumerate(fatias, start=1):
+                jobs.append({
+                    "id": perfil["id"],
+                    "email": perfil["email_destino"].strip(),
+                    "assunto": f"📋 Relatório PCE Semanal (Parte {idx}/{len(fatias)}) - {len(fatia)} Novos Editais",
+                    "html": _montar_html(fatia, inicio, fim, agora),
+                })
+        else:
+            # Envio normal em lote único se estiver dentro do limite seguro
+            jobs.append({
+                "id": perfil["id"],
+                "email": perfil["email_destino"].strip(),
+                "assunto": f"📋 Relatório PCE Semanal - {len(selecionados)} Novos Editais Encontrados",
+                "html": _montar_html(selecionados, inicio, fim, agora),
+            })
 
     # --- Envio simultâneo para todos ---
     ok_ids = []
