@@ -144,39 +144,38 @@ def _titulo_utilizavel(titulo):
 def validar_resultado(bruto):
     """
     Recebe o JSON devolvido pelo LLM e retorna um dict pronto para o banco.
-    Levanta ValueError se a resposta for inutilizável.
+    Levanta ConteudoInvalido se o edital não tiver prazo ou título utilizáveis.
     """
     if not isinstance(bruto, dict):
         raise ValueError(f"JSON raiz não é um objeto ({type(bruto).__name__})")
 
     titulo = texto_ou_none(bruto.get("titulo"), 300)
-    escopo = texto_ou_none(bruto.get("escopo"), 6000)
-
+    
     if not _titulo_utilizavel(titulo):
-        # Antes virava "Edital sem título" e entrava como CONCLUIDO. Agora é descartado.
         raise ConteudoInvalido(f"sem título específico do edital (veio: {titulo!r})")
 
     prazo = parse_data_iso(bruto.get("prazo_iso"))
-    inicio = parse_data_iso(bruto.get("inicio_iso"))
-    if inicio and prazo and inicio > prazo:
-        inicio = None   # incoerente (início depois do prazo): o modelo errou ou trocou as datas
-    if inicio and prazo and inicio == prazo:
-        prazo = None    # mesma data nos dois: quase certamente é a data de PUBLICAÇÃO lida como prazo
+    
+    # 🚨 CRÍTICO: Prazo de submissão passa a ser obrigatório para validar o edital
+    if prazo is None:
+        raise ConteudoInvalido("prazo de submissão não identificado ou inválido no texto do edital.")
 
-    datas = _limpar_datas(texto_ou_none(bruto.get("datas"), 200))
+    inicio = parse_data_iso(bruto.get("inicio_iso"))
+    if inicio and inicio > prazo:
+        inicio = None   # Incoerência: início depois do prazo
+    if inicio and inicio == prazo:
+        # Se forem idênticas, provavelmente o modelo leu a data de publicação no lugar do prazo
+        raise ConteudoInvalido("conflito de datas: data de início e prazo mapeados como idênticos.")
 
     return {
         "titulo": titulo,
-        "datas": datas or "A consultar",
-        # situação "Cancelada" / "Aguardando resultado do certame"... e sem prazo aberto
-        "encerrado": prazo is None and status_indica_encerrado(datas or ""),
+        "encerrado": False, # Controlado agora estritamente pelo vencimento do prazo_iso
         "pesquisa": texto_ou_none(bruto.get("pesquisa"), 3000) or "Não encontrada",
-        "escopo": escopo or "Não encontrado",
+        "escopo": texto_ou_none(bruto.get("escopo"), 6000) or "Não encontrado",
         "subvencao": texto_ou_none(bruto.get("subvencao"), 3000) or "Não encontrada",
         "vigencia_projeto": texto_ou_none(bruto.get("vigencia_projeto"), 500) or "Não encontrada",
         "tags_ia": normalizar_tags(bruto.get("tags_ia")),
-        # Datas: None quando ausentes/inválidas (vira NULL no banco)
-        "prazo_submissao": prazo,
-        "inicio_edital": inicio,
+        "prazo_submissao": prazo,        # Grava na coluna prazo_iso
+        "inicio_edital": inicio,          # Grava na coluna inicio_edital
         "fim_projeto": parse_data_iso(bruto.get("fim_projeto_iso")),
     }
