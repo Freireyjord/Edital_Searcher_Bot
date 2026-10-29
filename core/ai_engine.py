@@ -212,11 +212,9 @@ def analisar_e_gravar(edital, texto, log_func):
 
     if "erro" in bruto:
         if bruto.get("tipo") == "conexao":
-            # Problema de infraestrutura, não do edital: não gasta tentativa.
             log_func(f"    [X] {bruto['erro']}")
             return "ollama_offline"
         if bruto.get("tipo") == "timeout":
-            # Quem chama decide: pode ser lentidão deste edital ou do modelo inteiro (ex.: modelo de raciocínio).
             log_func(f"    [⏱️] {bruto['erro']}: {edital['url']}")
             return "timeout"
         registrar_falha(edital, "erro_ia", bruto["erro"], log_func)
@@ -225,7 +223,6 @@ def analisar_e_gravar(edital, texto, log_func):
     try:
         dados = validar_resultado(bruto)
     except ConteudoInvalido as e:
-        # Entrada sem edital de verdade: não repete a IA (gastaria GPU em loop) e não aparece na lista.
         _atualizar(edital["url"], {"status_ia": "descartado_invalido", "erro_detalhe": str(e)[:500]})
         log_func(f"    [🗑️] Descartado: {edital['url']} ({e})")
         return "descartado"
@@ -234,29 +231,26 @@ def analisar_e_gravar(edital, texto, log_func):
         return "falha"
 
     prazo = dados["prazo_submissao"]
-    fim = dados["fim_projeto"]
 
-    # Só o prazo de SUBMISSÃO decide se o edital venceu.
-    # (fim do projeto != prazo de inscrição; usá-lo descartava editais ainda abertos)
+    # 1. Edital com prazo de SUBMISSÃO já vencido
     if prazo and prazo < date.today():
         _atualizar(edital["url"], {
-            "datas": "Expirado",
             "prazo_iso": prazo.isoformat(),
             "status_ia": "descartado_vencido",
             "erro_detalhe": None,
         })
         return "descartado"
 
-    if dados["encerrado"]:
-        # "Cancelada", "Aguardando resultado do certame"...: não há submissão aberta; some da lista e do relatório.
+    # 2. Edital encerrado/cancelado
+    if dados.get("encerrado"):
         _atualizar(edital["url"], {
             "titulo": dados["titulo"],
-            "datas": dados["datas"],
             "status_ia": "descartado_encerrado",
             "erro_detalhe": None,
         })
         return "descartado"
 
+    # 3. Edital válido e CONCLUÍDO (grava apenas as colunas ISO oficiais)
     _atualizar(edital["url"], {
         "titulo": dados["titulo"],
         "pesquisa": dados["pesquisa"],
@@ -272,7 +266,6 @@ def analisar_e_gravar(edital, texto, log_func):
         "erro_detalhe": None,
     })
     return "ok"
-
 
 # ---------------------------------------------------------------------------
 # Esteira principal
