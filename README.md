@@ -1,174 +1,155 @@
 # Robô de Monitoramento e Prospecção de Editais (PCE)
 
-Ecossistema automatizado para varredura, extração, análise e notificação de editais públicos e chamadas de inovação, tecnologia e pesquisa.
+Ecossistema automatizado de nível empresarial para varredura, extração de texto composto (HTML/PDF/OCR), análise estruturada via Inteligência Artificial local e notificação fracionada de editais públicos e chamadas de inovação, tecnologia e pesquisa.
 
-O robô coleta editais de **CNPq, Finep, Fundep e Petrobras (Sigitec)**, usa uma **IA local (Ollama)** para resumir e categorizar o escopo técnico e grava tudo no **Supabase**. Também envia relatórios semanais personalizados por e-mail (SMTP corporativo) aos assinantes cadastrados.
+O robô monitora portais como **CNPq, Finep, Fundep, BNDES, FAPESB, Petrobras (Sigitec) e a Plataforma Inovação para a Indústria**, utiliza um LLM local (**Ollama**) para extração de dados determinística em JSON e persiste as informações em um cluster **Supabase**. Um subsistema de agendamento em thread isolada despacha relatórios semanais customizados por e-mail (SMTP corporativo) aos assinantes.
 
 ---
 
-## Estrutura do projeto
+## 🗺️ Arquitetura e Fluxo de Dados
+
+O ecossistema é baseado em uma **arquitetura orientada a eventos assíncrona e desacoplada**, utilizando as tabelas do Supabase como fila de mensageria:
+
+```text
+[Portais Externos] (Estáticos, SPAs e React)
+        │
+        ▼ (Scraping Híbrido, Fallback OCR e Deduplicação)
+  main_busca.py ──> [ utils/scraper_utils.py ] ──> [ utils/document_utils.py ]
+                             │
+                             ▼ (Insere registro com status 'PENDENTE')
+                     ┌───────────────┐
+                     │   SUPABASE    │
+                     └───────────────┘
+                             │
+                             ▼ (Consome fila 'PENDENTE' em lote contínuo)
+    main_ia.py  ──> [ core/ai_engine.py ] ──> [ Ollama Local (Temp 0) ]
+                             │
+                             ├── (Validação Rígida Schema: core/ai_validator.py)
+                             ▼ (Atualiza registro para status 'CONCLUIDO')
+                [ core/reporter.py (Thread) ] ──> [ Pool SMTP Paralelo ]
+```
+
+---
+
+## 📂 Estrutura do Projeto
 
 ```text
 meu_projeto/
-├── config.py              # Carrega .env, conecta ao Supabase, prompt da IA
-├── main.py                # Orquestrador (loop de background)
-├── .env                   # Segredos (NÃO versionar)
-├── .env.example           # Modelo de variáveis
-├── requirements.txt
+├── config.py              # Orquestrador central: carrega .env, singletons e Prompt Base
+├── main.py                # Depreciado: emite erro e instrui a fragmentação de execução
+├── main_busca.py          # Worker de busca: varredura perene e ingestão de registros
+├── main_ia.py             # Worker de IA: processamento de LLM + agendador de e-mails
+├── .env                   # Variáveis de ambiente reais (Ignorado no Git)
+├── .env.example           # Template de configuração e infraestrutura local
+├── requirements.txt       # Dependências operacionais fixadas
 │
 ├── core/
 │   ├── __init__.py
-│   ├── ai_engine.py       # Fila de IA (Ollama) e retrabalho
-│   ├── ai_validator.py    # Validação/normalização da resposta do LLM
-│   ├── db_cleaner.py      # Marca editais vencidos como expirados
-│   └── reporter.py        # Relatórios semanais por e-mail
+│   ├── agenda_relatorio.py # Regras matemáticas de slots e janelas temporárias
+│   ├── ai_engine.py       # Fila de IA, backoff exponencial e esteira de retrabalho
+│   ├── ai_validator.py    # Validador de schema, descarte de lixo e limpeza de tags
+│   ├── db_cleaner.py      # Expurgo de editais vencidos e otimização de espaço
+│   ├── reporter.py        # Geração de HTML e disparo fracionado de e-mails
+│   └── workers.py         # Laços de execução contínua de background
 │
 ├── utils/
 │   ├── __init__.py
-│   ├── scraper_utils.py   # Coleta página + PDFs anexos e registra no banco
-│   ├── document_utils.py  # Download seguro de PDF, pdfminer e OCR (fallback)
-│   ├── pdf_links.py       # Descobre e prioriza PDFs anexos em uma página
-│   ├── texto_utils.py     # Fontes do texto e orçamento de caracteres para a IA
-│   └── http_utils.py      # Sessão HTTP com retry/backoff
+│   ├── document_utils.py  # Download seguro stream-to-memory, pdfminer e OCR fallback
+│   ├── http_utils.py      # Sessão compartilhada com retry-adapter e backoff-factor
+│   ├── instancia_unica.py # Travas exclusivas no Sistema Operacional (.locks/)
+│   ├── pdf_links.py       # Scoring e priorização estatística de PDFs anexos
+│   ├── scraper_utils.py   # Validação primária de entrada e montagem de texto composto
+│   ├── texto_utils.py     # Algoritmo Water-Filling para divisão de contexto de IA
+│   └── url_utils.py       # Sanitização fragmentária de caminhos e abas
 │
-└── portais/               # Um módulo por portal
-    ├── __init__.py
-    ├── cnpq.py
-    ├── fundep.py
-    ├── finep.py
-    └── petrobras.py
+├── portais/               # Motores de scraping (Descoberta automática)
+│   ├── __init__.py
+│   ├── bndes.py           # Varredura de blocos colapsáveis (Plone) com suporte a auditoria
+│   ├── cnpq.py            # Mineração estática cirúrgica de alta velocidade
+│   ├── fapesb.py          # Automação de POST/Filtros e grid dinâmico via Playwright
+│   ├── finep.py           # Paginação assistida sob catálogo Liferay
+│   ├── fundep.py          # Extração em requisição única capturando JSON interno Next.js
+│   ├── petrobras.py       # Interceptador React, manipulação de DOM e reciclagem de sessão
+│   └── portal_industria.py # Monitoramento profundo multicategorias com retries
+│
+└── scripts/
+    ├── comparar_modelos.py # CLI para benchmark, TPS, tokens e divergências de LLMs
+    └── testar_portal.py   # CLI para dry-run de portais com proxy Supabase de leitura
 ```
 
-Cada módulo de portal deve expor:
-- `NOME_PORTAL`: nome gravado na coluna `portal`;
-- `varrer(log, atualizar_tabela_func)`: coleta e registra os editais;
-- `recuperar(page, url)` *(opcional)*: re-extração de texto no retrabalho. Se não existir, usa-se o extrator genérico.
+---
+
+## 🛠️ Tecnologias e Motores Principais
+
+*   **Python 3.13** como runtime principal.
+*   **Supabase (PostgreSQL)** para persistência e orquestração de fila.
+*   **Ollama** para processamento de IA generativa em infraestrutura local (On-Premise).
+*   **Playwright (Chromium Headless Shell)** para emulação e interação com SPAs baseadas em Javascript.
+*   **pdfminer.six** para extração de strings vetoriais de documentos nativos.
+*   **Tesseract OCR + pdf2image (Poppler)** para digitalização e conversão de PDFs escaneados.
 
 ---
 
-## Tecnologias
+## 🚀 Instalação e Configuração
 
-- **Python 3.13**
-- **Supabase** (PostgreSQL) para persistência
-- **Ollama** (`qwen2.5:14b-instruct` por padrão) para extração estruturada em JSON
-- **Playwright** + **BeautifulSoup4** para raspagem (SPAs e HTML estático)
-- **pdfminer.six** para PDFs com texto; **pytesseract + pdf2image** (OCR) como fallback para PDFs escaneados
-
----
-
-## Instalação
-
+### 1. Clonar e Inicializar o Ambiente
 ```bash
 git clone <URL-DO-REPOSITORIO>
 cd <pasta-do-projeto>
 
 python -m venv .venv
-# Windows: .venv\Scripts\activate   |   Linux/Mac: source .venv/bin/activate
+# Ativação no Windows: .venv\Scripts\activate | Linux/Mac: source .venv/bin/activate
 
 pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-### Ollama
+### 2. Configuração do Ambiente Local (OCR)
+*   **Tesseract:** Certifique-se de que o binário possui o pacote de idioma `por` instalado. Adicione o caminho de execução na variável `TESSERACT_CMD` se ele não estiver no PATH global do sistema.
+*   **Poppler:** Essencial para o funcionamento do modulo `pdf2image`. No ecossistema Windows, aponte a pasta `bin` na variável `POPPLER_PATH`.
 
-Instale o [Ollama](https://ollama.com) e baixe o modelo:
-
+### 3. Configuração de Variáveis de Ambiente
+Copie o arquivo de exemplo para inicializar o seu arquivo real:
 ```bash
-ollama pull qwen2.5:14b-instruct
+cp .env.example .env
 ```
-
-### OCR (opcional)
-
-Só é necessário para PDFs escaneados. Sem ele, esses PDFs são ignorados (com aviso no log).
-- **Tesseract** com o idioma `por`. Defina `TESSERACT_CMD` se não estiver no PATH.
-- **Poppler** (usado pelo `pdf2image`). No Windows, defina `POPPLER_PATH` com a pasta `bin`.
-
-### Variáveis de ambiente
-
-```bash
-cp .env.example .env     # Windows: copy .env.example .env
-```
-
-Preencha o `.env`:
-
-| Variável | Descrição |
-|---|---|
-| `SUPABASE_URL` | URL do projeto Supabase |
-| `SUPABASE_SERVICE_KEY` | Chave `service_role` (somente backend; nunca no front-end) |
-| `OLLAMA_URL` / `OLLAMA_MODEL` | Endpoint e modelo do Ollama |
-| `SMTP_SERVIDOR` / `SMTP_PORTA` / `SMTP_REMETENTE` | Relay de e-mail |
-
-### Banco de dados
-
-Execute no SQL Editor do Supabase, nesta ordem:
-
-```sql
--- Passo 2
-ALTER TABLE editais ADD COLUMN IF NOT EXISTS texto_extracao text;
-```
-
-Depois rode `sql/002_tentativas_e_fim_projeto.sql` (colunas `tentativas`, `erro_detalhe`, `fim_projeto` e padronização de `prazo_iso` para NULL), `sql/004_relatorio_semanal.sql` (`concluido_em` e `ultima_semana_enviada`) e `sql/005_inicio_edital.sql` (`inicio_edital`). **Rode 004 e 005 antes de subir o novo `ai_engine.py`**: ele passa a gravar essas colunas.
+Abra o `.env` e preencha com os dados de infraestrutura:
+*   `SUPABASE_SERVICE_KEY`: Use estritamente a chave `service_role` (segurança de backend). Nunca exponha essa credencial no front-end.
+*   `OLLAMA_MODEL`: Escolha do modelo (Padrão recomendado: `qwen3.5:9b`).
+*   `OLLAMA_THINK`: Controle de raciocínio (`off` | `auto` | `on`). Modelos estilo DeepSeek-R1 ou Qwen3.5 com raciocínio ligado geram milhares de tokens ocultos, reduzindo a performance. O padrão recomendado para extração rápida é `off`.
 
 ---
 
-## Execução
+## 🔄 Funcionamento dos Processos Operacionais
 
-O robô roda em **dois processos independentes** que conversam só pelo banco (a busca grava editais `PENDENTE`; a IA os consome):
+O ecossistema é mantido vivo através de **dois processos paralelos** que não compartilham memória, conversando estritamente através de transações de estado no Supabase.
+
+Para rodar em ambiente de produção, abra dois terminais (ou configure duas tarefas simultâneas no Agendador do Windows):
 
 ```bash
-python main_busca.py     # varre os portais a cada INTERVALO_BUSCA_SEGUNDOS (padrão 2 h) e grava editais novos
-python main_ia.py        # analisa os editais assim que aparecem (confere a fila a cada 60 s) + relatório semanal
+# Terminal 1: Monitoramento contínuo de portais. Roda a cada 2 horas por padrão.
+python main_busca.py
+
+# Terminal 2: Esteira de processamento Ollama + Disparador de Relatório Semanal
+python main_ia.py
 ```
 
-Rode **os dois** (dois terminais, ou duas tarefas do Agendador de Tarefas do Windows: "ao iniciar o computador" e "executar estando o usuário conectado ou não"). Se um parar, a outra metade do fluxo para: sem `main_busca` não entram editais novos; sem `main_ia` nada é analisado e **o relatório de segunda não sai** (o agendador vive no `main_ia`).
+### 🔒 Mecanismos de Proteção e Resiliência Integrados
+1.  **Trava de Instância Única (msvcrt / fcntl):** O robô cria travas diretamente no kernel do Sistema Operacional ao iniciar cada trabalhador. Se você tentar rodar um segundo `main_ia.py` por engano, ele será abortado imediatamente, impedindo análises de GPU duplicadas ou disparo em massa de e-mails repetidos.
+2.  **Algoritmo Water-Filling (`texto_utils.py`):** Antes de enviar o edital para o Ollama, o robô divide dinamicamente o orçamento máximo de contexto de texto (`MAX_CHARS_TEXTO_IA`). Páginas ou anexos pequenos são lidos por inteiro, enquanto documentos massivos sofrem truncamento bidirecional equilibrado (mantendo início e fim), garantindo que um anexo gigante nunca engula o contexto das outras fontes.
+3.  **Controle Inteligente de Concorrência de Falhas (Timeouts Seguidos):** Se o modelo sofrer timeouts repetidos por lentidão de hardware ou travamento (`IA_MAX_TIMEOUTS_SEGUIDOS`), o processo de IA suspende temporariamente a fila e entra em backoff exponencial de segurança **sem queimar ou gastar as tentativas** dos editais sob análise.
+4.  **Esteira Automática de Retrabalho:** Editais capturados com páginas corrompidas, limitação de rede ou falha de renderização inicial são jogados para o status `erro_sem_texto`. O sistema re-executa a raspagem de forma isolada utilizando instâncias reais e emuladas do Playwright.
+5.  **Fatiamento Crítico de E-mails (Segmentation):** Para evitar que os relatórios semanais excedam as limitações físicas de tamanho de e-mail estipuladas por firewalls corporativos e relays SMTP, se um assinante possuir um volume superior a 20 editais novos em sua semana, o relatório é fatiado de forma automatizada em mensagens numeradas ("Parte 1/X").
 
-Cada papel só admite **uma instância** (lock em `.locks/`): iniciar um segundo `main_ia.py` encerra com aviso, o que evita análise em dobro e e-mails duplicados.
+---
 
-- A IA processa editais novos em lotes (`IA_TAMANHO_LOTE`) sem esperar a varredura terminar.
-- Retentativas (`erro_ia`) e retrabalho (re-scraping) rodam a cada `IA_INTERVALO_RETRY_SEGUNDOS` (30 min): um edital que falhou não é repetido em sequência.
-- Ollama fora do ar: a IA espera `IA_BACKOFF_OLLAMA_SEGUNDOS` (5 min) e tenta de novo.
+## 📊 Ciclo de Vida do Registro (`status_ia`)
 
-## Fluxo interno
-
-1. **Limpeza** (`db_cleaner`): editais com prazo anterior a hoje recebem status `expirado`.
-2. **Raspagem** (`portais/`): cada portal localiza URLs novas. Para cada edital, o texto da página e o dos PDFs anexos mais relevantes (até `MAX_PDFS_POR_EDITAL`; resultados, atas e cartilhas são ignorados) são gravados em `texto_extracao`, separados por linhas `=== FONTE: ... ===`. O registro nasce `PENDENTE`.
-3. **Esteira de IA** (`ai_engine`): o Ollama lê `texto_extracao` (limitado a `MAX_CHARS_TEXTO_IA` caracteres; o orçamento é dividido entre página e PDFs, mantendo início e fim de cada fonte) e devolve JSON. A resposta passa por `ai_validator` (tipos, datas, tags) antes de ir ao banco, e o status vira `CONCLUIDO`. O texto bruto é mantido para reprocessamento.
-4. **Retrabalho**: editais com `erro_sem_texto` são raspados de novo pelo `recuperar` do respectivo portal.
-5. **Tentativas**: cada falha de scraping ou de IA incrementa `tentativas`. Ao atingir `MAX_TENTATIVAS` (padrão 3) o status vira `falha_definitiva` e o edital sai da fila; o motivo fica em `erro_detalhe`. Se o Ollama estiver fora do ar, a fila é interrompida sem gastar tentativas.
-6. **Prazo**: apenas o prazo de *submissão* (`prazo_iso`) define se o edital venceu. Prazo desconhecido fica `NULL`; o fim do projeto fica em `fim_projeto`.
-
-### Status de `editais.status_ia`
-
-`PENDENTE` · `erro_sem_texto` · `erro_ia` · `CONCLUIDO` · `descartado_vencido` · `falha_definitiva` · `expirado`
-7. **Relatório semanal** (`reporter` + `agenda_relatorio`): **toda segunda às 07:00** (horário da máquina; ajustável por `REPORT_DIA_SEMANA/HORA/MINUTO`). Roda numa **thread própria**, que confere a agenda a cada 30 s, independente do ciclo de scraping/IA de 2 em 2 horas, então um ciclo longo nunca atrasa nem pula o envio. Todos os assinantes pendentes recebem **ao mesmo tempo** (até `REPORT_MAX_PARALELO` envios simultâneos; cada um com seu filtro de tags). Cada relatório traz os editais **iniciados** de segunda a domingo da semana anterior (coluna `inicio_edital`, extraída pela IA). Edital **sem data de início identificada** entra como recente (vale o momento em que ficou `CONCLUIDO`, coluna `concluido_em`). Cada edital aparece em uma única semana. Se o robô estiver desligado na segunda, o envio acontece assim que ele voltar, com a mesma janela. `ultima_semana_enviada` controla a agenda; o envio manual da UI não a altera. Assinante novo entra na agenda e recebe a partir da segunda seguinte. Falhas de SMTP: até 3 tentativas por semana, com 10 min de intervalo.
-
-## Segurança
-
-- O `.env` está no `.gitignore`. Nunca faça commit de chaves.
-- Se alguma chave já foi publicada em repositório, **revogue/rotacione** no painel do Supabase.
-- O robô usa `service_role`; o front-end (UI) deve usar apenas a chave publishable com RLS permitindo somente `SELECT`.
-
-## Adicionando um portal novo
-
-1. Crie `portais/<nome>.py` com: `NOME_PORTAL = "Nome - Descrição"` (o filtro da UI usa o texto antes do ` - `),
-   `varrer(log, atualizar_tabela_func=None)` e, para SPAs, `recuperar(page, url)`. Os portais são descobertos sozinhos pela pasta.
-2. Despache cada edital com `web_utils.processar_pagina_interna(url, [], NOME_PORTAL, log, None)`. Pule cards já encerrados/cancelados.
-3. **Teste sem gravar nada:** `python scripts/testar_portal.py <nome> --max 15 --amostra 3`
-   (mostra URLs coletadas, quantas já existem no banco, duplicatas e a qualidade do texto; o Supabase fica só-leitura).
-4. Confira todos os portais de uma vez: `python scripts/testar_portal.py --contrato`.
-5. Só então abra o PR para a `main`. Branch com um único portal deve alterar só `portais/<nome>.py`.
-
-## Modelo recomendado
-
-`qwen3.5:9b` com `OLLAMA_THINK=off` (padrão do `config.py`). No benchmark com 5 editais reais: ~15 s por edital e 5/5 JSON válidos,
-contra ~57 s do `qwen2.5:14b-instruct` (que não cabe inteiro numa GPU de 12 GB: roda a 4-8 tokens/s) e ~176 s do `qwen3.5:9b` com o
-raciocínio ligado (2 de 5 respostas inválidas). Rode `scripts/comparar_modelos.py` sempre que trocar de modelo ou de prompt.
-
-## Solução de problemas da IA
-
-**`timeout após 180s` em todos os editais** (ou o log `N timeouts seguidos`): o modelo está lento demais. Os suspeitos:
-- **Modelo de raciocínio** (Qwen3.5, DeepSeek-R1...): "pensa" milhares de tokens antes do JSON. Teste `OLLAMA_THINK=off` ou use um modelo *instruct* (`qwen2.5:14b-instruct`).
-- **Modelo grande demais para a VRAM** (ex.: 27B em GPU de 8 GB): parte roda na CPU. Confira a coluna `PROCESSOR` em `ollama ps`.
-- Antes de trocar de modelo em produção, compare com `python scripts/comparar_modelos.py --modelos A B --think auto off --n 5`.
-
-Vários timeouts **seguidos** pausam a fila sem gastar tentativas dos editais (espera 5, 10, 20... até 60 min).
+*   `PENDENTE`: Ingestão concluída com sucesso pelo Worker de Busca; aguardando processamento da IA.
+*   `erro_sem_texto`: Página capturada sem conteúdo legível. Encaminhada para a esteira de re-scraping via Playwright.
+*   `erro_ia`: Falha temporária no processamento da IA (JSON malformado ou indisponibilidade). Re-tentada a cada 30 minutos até o limite definido (`MAX_TENTATIVAS`).
+*   `CONCLUIDO`: Processamento finalizado. Dados normalizados salvos e prontos para o painel visual e relatórios.
+*   `descartado_invalido`: Registro limpo e retirado da fila por não conter um título de edital válido (Páginas de erro 404 capturadas, cabeçalhos genéricos).
+*   `descartado_encerrado`: Identificado pela IA como cancelado ou já finalizado antes do processamento.
+*   `descartado_vencido`: Prazo de submissão do edital expirado antes do processamento de IA.
+*   `falha_definitiva`: Registro estourou o teto de re-tentativas. Removido automaticamente da fila de concorrência para auditoria manual.
